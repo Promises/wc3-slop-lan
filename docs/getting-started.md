@@ -46,7 +46,7 @@ For each test this:
 9. checks for desyncs;
 10. stops everything it started.
 
-Each client takes about a minute to come up. Artifacts go to `examples/any-map/.slop/<time>-<test>/`:
+Each client takes about a minute to come up. Artifacts go to `maps/<map>/.slop/<time>-<test>/`:
 the host's log, and each client's trace when the map is a Lua map.
 
 > The harness refuses to start while any Warcraft III is running. Close it first. It never
