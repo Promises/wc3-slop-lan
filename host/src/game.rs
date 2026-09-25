@@ -265,13 +265,14 @@ impl Game {
             return Ok(());
         };
         let player = &mut self.players[index];
-        if !player.name.eq_ignore_ascii_case(&name) {
+        // An offline client joins without a name; it then keeps the configured one
+        if !name.is_empty() && !player.name.eq_ignore_ascii_case(&name) {
             tracing::info!("{:?} takes the place of {}", name, player.name);
             player.name = name.clone();
         }
         player.conn = Some(conn);
         let pid = player.pid;
-        tracing::info!("{:?} joined as player {}", name, pid);
+        tracing::info!("{:?} joined as player {} ({})", name, pid, player.name);
         for packet in self.welcome(pid, local)? {
             self.send_to(pid, packet);
         }

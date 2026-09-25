@@ -109,7 +109,8 @@ def main(argv=None):
             except BaseException:
                 session.stop()
                 raise
-            print(f'up: `slop status`, `slop cmd 0 .units`, `slop down` when done')
+            act = 'slop cmd 0 .gold 5000' if session.seat is not None else 'slop file 0 .gold 5000'
+            print(f'up, and left running: `slop status`, `{act}`, `slop state`; `slop down` when done')
             return 0
         if args.command == 'test':
             ensure_host_binary(config)
