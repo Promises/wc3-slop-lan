@@ -8,9 +8,13 @@ by `if Slop then ... end`, and costs nothing when it is absent. See docs/library
   In:  commands from the host's seat (sync prefix `Slop.prefix`, data "<player> <line>"), or from
        a file dropped into a client's CustomMapData (see Slop.files) - run as that player on
        every client, so the game stays in step.
-  Out: the lockstep trace, numbered chunks <trace>-NNNN.txt in CustomMapData: a heartbeat each
-       second, the events the map notes, and what commands did. Every client writes the same
-       lines while they agree.
+  Out: the lockstep trace, numbered chunks <trace>-p<slot>-NNNN.txt in CustomMapData: a
+       heartbeat each second, the events the map notes, and what commands did. Every client
+       writes the same lines while they agree.
+
+Every file carries the local player's slot in its name, so clients that share a data folder
+(two games on one machine) keep apart. File names are local to each client; only what goes
+into the files has to be the same everywhere.
 
 Everything here must run the same on every client: no GetLocalPlayer, no wall clock, no UI.
 ]]
@@ -26,8 +30,11 @@ do
     }
 
     local TRACE = config.trace or 'slop-trace'
-    local BEAT_FILE = (config.trace or 'slop') .. '-beat.txt'
+    local BEAT = config.beat or 'slop-beat'
     local COMMAND_FILE = config.commands or 'slop-cmd'
+    -- '-p<slot>' for the player this client plays, set at start: it names files only, never
+    -- anything the game does, so it may differ between clients
+    local me = ''
     -- Commands a client read from its own folder, sent as its own player
     local SELF_PREFIX = Slop.prefix .. 'self'
     -- A flush writes at most this many lines, which bounds the stall it causes
@@ -75,7 +82,7 @@ do
             -- The game writes each line inside a quoted string, so quotes have to go
             Preload((line:gsub('["\r\n]', "'")))
         end
-        PreloadGenEnd(string.format('%s-%04d.txt', TRACE, chunk))
+        PreloadGenEnd(string.format('%s%s-%04d.txt', TRACE, me, chunk))
         pending = {}
     end
 
@@ -288,7 +295,7 @@ do
     -- writer aims just ahead of the number the beat file announces.
     local function poll()
         attempt = attempt + 1
-        local name = string.format('%s-%04d.txt', COMMAND_FILE, attempt)
+        local name = string.format('%s%s-%04d.txt', COMMAND_FILE, me, attempt)
         local ok, value = pcall(function()
             PreloadStart()
             Preloader(name)
@@ -312,7 +319,7 @@ do
         PreloadGenClear()
         PreloadGenStart()
         Preload('cmdpoll=' .. attempt)
-        PreloadGenEnd(BEAT_FILE)
+        PreloadGenEnd(BEAT .. me .. '.txt')
     end
 
     local function every(seconds, fn)
@@ -326,6 +333,7 @@ do
             return
         end
         started = true
+        me = '-p' .. GetPlayerId(GetLocalPlayer())
         -- A simulation clock: timers run in lockstep, the wall clock does not
         every(TICK_SECONDS, function() ticks = ticks + 1 end)
         every(1, heartbeat)

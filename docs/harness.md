@@ -44,7 +44,7 @@ removes it.
 - **What it leaves:** its page stays in the game's webui folder. The page that was there first
   is kept as `index.html.before-slop` (`harness/slop/webui.py`).
 - **The staged map** goes to `~/Library/Application Support/Blizzard/Warcraft III/Maps/<map.folder>/`.
-  The second client's Maps folder gets a link to that folder.
+  Both clients use that data folder.
 
 ## Writing tests
 
@@ -104,8 +104,10 @@ client costs time, not a test. `--fresh` launches the clients again for every te
 
 - **A player** is a 0-based slot: 0 is red, 1 is blue. Named players take the map's human slots
   in order.
-- **A client** is 0 or 1: which game's files to read. While the game is in step, both clients
-  hold the same trace, so client 0 is usually enough.
+- **A client** is 0 or 1: the game playing the first or the second player's slot, in slot
+  order. Both games share your data folder; the library names each game's files by the player
+  it plays. While the game is in step, both clients hold the same trace, so client 0 is usually
+  enough. (`screenshot(client)` goes by launch order instead, which usually matches.)
 
 ## MCP
 

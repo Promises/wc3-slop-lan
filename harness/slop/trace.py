@@ -1,13 +1,14 @@
 """Reading back what the map library writes: the lockstep trace and its heartbeat.
 
-A trace line is `<sequence> t<ticks> h<handles> <category> <text>`; the heartbeat is the
+Every client writes its files under its own player's slot (slop-trace-p0-0001.txt, ...), so the
+clients of one machine can share a data folder. A trace line is `<sequence> t<ticks> h<handles> <category> <text>`; the heartbeat is the
 category `beat`, with `key=value` pairs and a `p<slot>(key=value ...)` part per player.
 """
 import pathlib
 import re
 
 TRACE = 'slop-trace'
-BEAT_FILE = 'slop-beat.txt'
+BEAT = 'slop-beat'
 COMMAND_FILE = 'slop-cmd'
 LINE = re.compile(r'(\d+) t(\d+) h(\d+) (\S+) ?(.*)')
 
@@ -18,16 +19,22 @@ def data_folder(home):
 
 
 def clear(folder):
-    """Removes what an earlier game left: trace chunks, command files, the beat file."""
+    """Removes what earlier games left: trace chunks, command files, beat files."""
     folder = pathlib.Path(folder)
-    for stale in [*folder.glob(TRACE + '-*.txt'), *folder.glob(COMMAND_FILE + '-*.txt'), folder / BEAT_FILE]:
-        stale.unlink(missing_ok=True)
+    for pattern in (TRACE + '-*.txt', COMMAND_FILE + '-*.txt', BEAT + '*.txt'):
+        for stale in folder.glob(pattern):
+            stale.unlink(missing_ok=True)
 
 
-def read(folder):
-    """Every line a client has written, oldest first."""
+def chunks(folder, slot):
+    """The trace files of the client playing that slot, in order."""
+    return sorted(pathlib.Path(folder).glob(f'{TRACE}-p{slot}-*.txt'))
+
+
+def read(folder, slot):
+    """Every line the client playing that slot has written, oldest first."""
     lines = []
-    for chunk in sorted(pathlib.Path(folder).glob(TRACE + '-*.txt')):
+    for chunk in chunks(folder, slot):
         lines += re.findall(r'Preload\( "(.*)" \)', chunk.read_text(errors='replace'))
     lines.sort(key=lambda line: int(line.split(' ', 1)[0]) if line.split(' ', 1)[0].isdigit() else 0)
     return lines
@@ -100,12 +107,13 @@ def parse_unit(line):
                 y=int(match.group(5)), life=int(match.group(6)), order=match.group(7))
 
 
-def write_command(folder, line, command_id):
-    """Drops a command for the file channel: a preload file that sets the carrier tooltip, in the
-    few names just ahead of the one the game is polling (a name polled while missing is never
-    read again). Returns the names written, or None when no game is polling."""
+def write_command(folder, slot, line, command_id):
+    """Drops a command for the file channel of the client playing that slot: a preload file that
+    sets the carrier tooltip, in the few names just ahead of the one that client is polling (a
+    name polled while missing is never read again). The client runs it as its own player.
+    Returns the names written, or None when no game is polling."""
     folder = pathlib.Path(folder)
-    beat = folder / BEAT_FILE
+    beat = folder / f'{BEAT}-p{slot}.txt'
     polling = 0
     if beat.exists():
         for found in re.finditer(r'cmdpoll=(\d+)', beat.read_text(errors='replace')):
@@ -120,8 +128,8 @@ def write_command(folder, line, command_id):
             b'\tcall PreloadEnd( 0.0 )\r\n\nendfunction\n\n\r\n')
     names = range(polling + ahead, polling + ahead + spread)
     for number in names:
-        (folder / f'{COMMAND_FILE}-{number:04d}.txt').write_bytes(body)
-    for old in folder.glob(COMMAND_FILE + '-*.txt'):
+        (folder / f'{COMMAND_FILE}-p{slot}-{number:04d}.txt').write_bytes(body)
+    for old in folder.glob(f'{COMMAND_FILE}-p{slot}-*.txt'):
         if int(old.stem.rsplit('-', 1)[-1]) < polling:
             old.unlink(missing_ok=True)
     return list(names)

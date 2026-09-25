@@ -34,10 +34,12 @@ class TraceTest(unittest.TestCase):
     def test_read_and_kinds(self):
         with tempfile.TemporaryDirectory() as folder:
             folder = pathlib.Path(folder)
-            (folder / 'slop-trace-0002.txt').write_text('\tcall Preload( "3 t1 h1 order p0 x issued" )\n')
-            (folder / 'slop-trace-0001.txt').write_text('\tcall Preload( "1 t0 h1 slop started" )\n'
-                                                       '\tcall Preload( "2 t0 h1 beat handles=1" )\n')
-            lines = trace.read(folder)
+            (folder / 'slop-trace-p0-0002.txt').write_text('\tcall Preload( "3 t1 h1 order p0 x issued" )\n')
+            (folder / 'slop-trace-p0-0001.txt').write_text('\tcall Preload( "1 t0 h1 slop started" )\n'
+                                                          '\tcall Preload( "2 t0 h1 beat handles=1" )\n')
+            (folder / 'slop-trace-p1-0001.txt').write_text('\tcall Preload( "1 t0 h2 slop started" )\n')
+            lines = trace.read(folder, 0)
+            self.assertEqual(len(trace.read(folder, 1)), 1, 'each player reads its own files')
             self.assertEqual([line.split()[0] for line in lines], ['1', '2', '3'])
             self.assertEqual(trace.of_kind(lines, 'order'), ['3 t1 h1 order p0 x issued'])
             self.assertEqual(trace.last_beat(lines)['handles'], 1)
@@ -45,12 +47,15 @@ class TraceTest(unittest.TestCase):
     def test_command_file(self):
         with tempfile.TemporaryDirectory() as folder:
             folder = pathlib.Path(folder)
-            self.assertIsNone(trace.write_command(folder, '.units', 1))
-            (folder / trace.BEAT_FILE).write_text('\tcall Preload( "cmdpoll=10" )\n')
-            names = trace.write_command(folder, '.gold 5', 7)
+            self.assertIsNone(trace.write_command(folder, 1, '.units', 1))
+            (folder / 'slop-beat-p1.txt').write_text('\tcall Preload( "cmdpoll=10" )\n')
+            names = trace.write_command(folder, 1, '.gold 5', 7)
             self.assertEqual(names[0], 14)
-            body = (folder / 'slop-cmd-0014.txt').read_bytes()
+            body = (folder / 'slop-cmd-p1-0014.txt').read_bytes()
             self.assertIn(b'CMD:7:.gold 5', body)
+            self.assertIsNone(trace.write_command(folder, 0, '.gold 5', 8), "player 0's game is not polling")
+            trace.clear(folder)
+            self.assertEqual(list(folder.iterdir()), [])
 
 
 if __name__ == '__main__':

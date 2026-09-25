@@ -19,8 +19,10 @@
   - **from a file**: a client polls its own CustomMapData for command files and sends what it
     finds as its own player. This works with a hidden host, or with no host at all (a Battle.net
     game). `slop file` writes these files.
-- **One way out: the trace.** Numbered chunks `slop-trace-NNNN.txt` in each client's
-  CustomMapData, flushed every second. Categories marked urgent are flushed at once, because a
+- **One way out: the trace.** Numbered chunks `slop-trace-p<slot>-NNNN.txt` in CustomMapData,
+  flushed every second. Every file the library writes or reads carries the slot of the player
+  that client plays, so two clients can share a data folder. The file names differ between
+  clients by design; what's in the files doesn't. Categories marked urgent are flushed at once, because a
   desync drops the client within the second.
 
 A trace line is:

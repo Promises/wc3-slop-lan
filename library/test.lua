@@ -15,6 +15,7 @@ function Player(i)
     return players[i]
 end
 function GetPlayerId(p) return p.id end
+function GetLocalPlayer() return Player(1) end
 function GetPlayerSlotState(p) return p.playing and 'playing' or 'empty' end
 function GetPlayerController(p) return 'user' end
 function GetPlayerState(p, which) return p[which] end
@@ -86,7 +87,7 @@ end
 local function traced()
     local all = {}
     for n = 1, 9999 do
-        local chunk = files[string.format('slop-trace-%04d.txt', n)]
+        local chunk = files[string.format('slop-trace-p1-%04d.txt', n)]
         if not chunk then break end
         for _, line in ipairs(chunk) do all[#all + 1] = line end
     end
@@ -105,7 +106,7 @@ end
 check('Slop is defined before main', Slop ~= nil and Slop.seat == 17)
 main()
 check("the map's main still runs", mapStarted)
-check('it started after main', find('slop started v1 seat=17 prefix=slop') ~= nil)
+check('it started after main, writing under the local player', find('slop started v1 seat=17 prefix=slop') ~= nil)
 
 Slop.heartbeat(function() return 'wave=3' end)
 Slop.playerFields(function(p) return 'k=' .. p end)
@@ -144,9 +145,9 @@ check('host commands from anyone but the seat are ignored', Player(0).gold == 17
 
 -- The file channel: the beat file names the poll, a command file is read and synced as self
 run(1)
-local poll = tonumber(files['slop-beat.txt'][1]:match('cmdpoll=(%d+)'))
+local poll = tonumber(files['slop-beat-p1.txt'][1]:match('cmdpoll=(%d+)'))
 check('the beat file names the poll', poll and poll > 0)
-preloaded[string.format('slop-cmd-%04d.txt', poll + 1)] = 'CMD:42:.lumber 99'
+preloaded[string.format('slop-cmd-p1-%04d.txt', poll + 1)] = 'CMD:42:.lumber 99'
 run(0.5)
 check('a command file is synced as the reading player', sent[1] and sent[1].prefix == 'slopself' and sent[1].data == '.lumber 99')
 sync = {player = Player(1), data = sent[1] and sent[1].data, prefix = 'slopself'}

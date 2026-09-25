@@ -14,7 +14,7 @@
 #   harness/wc3.sh eval 1 'window.slop.sent.length'            any code, answered on the log
 #   harness/wc3.sh reload 1                         re-read the page after editing it
 #   harness/wc3.sh trace 1 [quiet|all] [chars]      how much traffic is recorded
-#   harness/wc3.sh cmd 1 -log                       run a chat command in that game
+#   harness/wc3.sh cmd 1 [p0] .gold 500             a command through that game's file channel
 #   harness/wc3.sh log 1 [lines] [wide]             what that instance last saw
 #   harness/wc3.sh ask 1 GetMapList '{}' [lines]    send one, then show what came back
 #   harness/wc3.sh reset                            forget the instances that checked in
@@ -116,44 +116,26 @@ case "$verb" in
     command_post to="$to" verb=trace "quiet:=$quiet" "room:=$room"
     ;;
   cmd)
+    # A command through a game's file channel, run as the player that game plays. Games sharing
+    # a data folder tell theirs apart by player: name it (p0, p1, ...) when several are polling
     to="${2:?instance}"; shift 2
+    slot=""
+    if [[ "${1:-}" =~ ^p[0-9]+$ ]]; then slot="${1#p}"; shift; fi
     root=$(data_root_of "$to")
-    python3 - "$root" "$*" <<'PYCMD'
-import pathlib, re, sys, time
-root, line = pathlib.Path(sys.argv[1]), sys.argv[2]
-root.mkdir(parents=True, exist_ok=True)
-
-# Where the game has got to: it asks for one name per poll and never asks twice, because a
-# name asked for while the file is missing is remembered as missing. The heartbeat in the
-# lockstep trace says which name it is on.
-polling = 0
-beat = root / 'slop-beat.txt'
-if beat.exists():
-    for found in re.finditer(r'cmdpoll=(\d+)', beat.read_text(errors='replace')):
-        polling = max(polling, int(found.group(1)))
-if polling == 0:
-    sys.exit('no running game to command: nothing has published a poll number yet')
-
-# Aim a little ahead of it and fill a few names, so one is in place before it is asked for.
-# They all carry the same id, and the game takes the first and ignores the rest.
-AHEAD, SPREAD = 4, 8
-command_id = int(time.time())
-payload = 'CMD:%d:%s' % (command_id, line)
-body = (b'function PreloadFiles takes nothing returns nothing\n\r\n'
-        b'\tcall PreloadStart()\r\n'
-        b'\tcall Preload( "")\ncall BlzSetAbilityTooltip(\'ANcl\', "' + payload.encode()
-        + b'", 0)\n//" )\r\n'
-        b'\tcall PreloadEnd( 0.0 )\r\n\nendfunction\n\n\r\n')
-for number in range(polling + AHEAD, polling + AHEAD + SPREAD):
-    (root / ('slop-cmd-%04d.txt' % number)).write_bytes(body)
-
-# Names already passed are dead weight
-for old in root.glob('slop-cmd-*.txt'):
-    if int(old.stem.split('-')[-1]) < polling:
-        old.unlink()
-
-print('%s  ->  names %d-%d (it is asking for %d)'
-      % (line, polling + AHEAD, polling + AHEAD + SPREAD - 1, polling))
+    python3 - "$root" "$slot" "$*" "$(cd "$(dirname "$0")" && pwd)" <<'PYCMD'
+import pathlib, sys, time
+root, slot, line, here = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, here)
+from slop import trace
+if not slot:
+    beats = sorted(root.glob(trace.BEAT + '-p*.txt'))
+    if len(beats) != 1:
+        sys.exit('name the player (p0, p1, ...): %d games are polling in %s' % (len(beats), root))
+    slot = beats[0].stem.rsplit('-p', 1)[1]
+names = trace.write_command(root, int(slot), line, int(time.time() * 1000) % 10**9)
+if names is None:
+    sys.exit('no running game to command: player %s is not polling' % slot)
+print('%s  ->  p%s, names %d-%d' % (line, slot, names[0], names[-1]))
 PYCMD
     ;;
   log)

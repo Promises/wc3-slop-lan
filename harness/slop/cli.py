@@ -39,8 +39,6 @@ def check(config):
     (ok if config.game.exists() else bad)(f'game {config.game}')
     (ok if config.webui_dir.is_dir() else bad)(f"the game's webui folder {config.webui_dir}")
     (ok if config.host_binary.exists() else bad)(f'host {config.host_binary}' + ('' if config.host_binary.exists() else ' (slop up builds it; needs cargo)'))
-    if config.clients > 1:
-        (ok if config.alt_home.is_dir() else bad)(f'second data folder {config.alt_home}')
     for tool in ('lldb', 'lsof', 'curl'):
         (ok if shutil.which(tool) else bad)(f'{tool} on PATH')
     if config.tests_file:

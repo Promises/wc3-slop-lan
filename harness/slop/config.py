@@ -36,7 +36,6 @@ class Config:
     # [clients]
     clients: int = 2
     names: list = field(default_factory=lambda: ['red', 'blue'])
-    alt_home: pathlib.Path = pathlib.Path.home() / 'BattleNet-alt'
     # [tests]
     tests_file: pathlib.Path | None = None
     # [game]
@@ -81,7 +80,7 @@ def load(explicit=None):
     known = {'map': {'file', 'folder', 'build', 'build_dir'},
              'host': {'mode', 'seat', 'prefix', 'control', 'binary'},
              'library': {'inject'},
-             'clients': {'count', 'names', 'alt_home'},
+             'clients': {'count', 'names'},
              'tests': {'file'},
              'game': {'server', 'binary', 'webui'}}
     for section, values in raw.items():
@@ -112,8 +111,6 @@ def load(explicit=None):
     config.inject = bool(get('library', 'inject', config.inject))
     config.clients = int(get('clients', 'count', config.clients))
     config.names = list(get('clients', 'names', config.names))
-    if get('clients', 'alt_home'):
-        config.alt_home = resolve(get('clients', 'alt_home'))
     config.tests_file = resolve(get('tests', 'file'))
     config.server = get('game', 'server', config.server)
     if get('game', 'binary'):
@@ -126,7 +123,7 @@ def load(explicit=None):
     if config.seat != 'auto' and not config.seat.isdigit():
         raise ConfigError(f'{path.name}: host.seat is a slot number or "auto"')
     if not 1 <= config.clients <= 2:
-        raise ConfigError(f'{path.name}: clients.count is 1 or 2 (one data folder each)')
+        raise ConfigError(f'{path.name}: clients.count is 1 or 2')
     if len(config.names) < config.clients:
         raise ConfigError(f'{path.name}: clients.names needs a name per client')
     return config

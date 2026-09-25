@@ -43,9 +43,7 @@ Or write your own `slop.toml` (see [docs/config.md](docs/config.md)) and run:
 **Needs:**
 - macOS, with Warcraft III 3.0.0.24268 (see *Limits*);
 - Python 3.11+;
-- Rust, to build the host (the first run builds it);
-- a second data folder for the second client (`~/BattleNet-alt` by default; the harness links
-  the map into it itself).
+- Rust, to build the host (the first run builds it).
 
 ## Docs
 
@@ -81,7 +79,7 @@ docs/
   that at a fixed address in 3.0.0.24268, and refuses any other build. See
   [porting.md](docs/porting.md) for how to find it again, and how Windows and Wine differ.
 - **The library needs a Lua map.** JASS maps still get hosting and the desync check.
-- **Two clients at most,** one per data folder.
+- **Two clients at most,** for now.
 - **The map must already be on disk.** The host does not send it to clients.
 
 Built on W3Champions' open Flo crates ([BogdanW3/W3C-Flo](https://github.com/BogdanW3/W3C-Flo)).

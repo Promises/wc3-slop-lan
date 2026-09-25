@@ -10,9 +10,6 @@
   StormLib is compiled from C along the way.
 - **The debugger allowed to attach to the game.** It is `lldb`, from Xcode's command line tools.
   If activation reports that it can't attach, `sudo DevToolsSecurity -enable` is the usual fix.
-- **For two clients, a second data folder.** Each client needs its own preferences, logs and
-  CustomMapData. The default is `~/BattleNet-alt`; any empty folder works. The harness links
-  the map into it itself.
 
 Nothing needs Battle.net. The clients start with `-editor`, which skips the login, and go offline.
 

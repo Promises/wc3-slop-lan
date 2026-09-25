@@ -13,6 +13,7 @@ no desync. See docs/harness.md.
 """
 import json
 import os
+import re
 import pathlib
 import shutil
 import socket
@@ -55,7 +56,10 @@ class Session:
         self.name = name
         self.log = log
         self.game_name = 'slop-' + uuid.uuid4().hex[:8]
-        self.homes = [pathlib.Path.home(), config.alt_home][:config.clients]
+        # Every client plays in the one data folder; the library names its files by player
+        self.data = trace.data_folder(pathlib.Path.home())
+        # The slot each client plays, in slot order: client 0 plays the first of them
+        self.client_slots = []
         self.artifacts = config.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-{name}"
         self.server = webui.Server(config.server)
         self.started_server = False
@@ -88,11 +92,10 @@ class Session:
         self.started_server = self.server.ensure(self.artifacts / 'webui.log')
         webui.install_page(config.webui_dir)
         self.server.reset()
-        for index, home in enumerate(self.homes):
-            env = dict(os.environ, HOME=str(home), CFFIXED_USER_HOME=str(home))
+        for index in range(config.clients):
             # -editor skips the Battle.net login; -nowfpause keeps an unfocused game running
             subprocess.Popen([str(config.game), '-editor', '-launch', '-windowmode', 'windowed', '-nowfpause'],
-                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             self._wait(lambda: self.server.checked_in() >= index + 1, 90, f'client {index + 1} to start')
             # Offline: LAN needs no Battle.net, and a sign-in can sit in the login queue for minutes
             self.server.command(index + 1, 'raw', message='PlayOffline', payload={})
@@ -150,8 +153,7 @@ class Session:
     def _play(self, timeout):
         """Hosts a game and joins every client to it."""
         config = self.config
-        for home in self.homes:
-            trace.clear(trace.data_folder(home))
+        trace.clear(self.data)
         self._start_host()
         for number in range(1, config.clients + 1):
             subprocess.run(['bash', str(ACTIVATE), str(number), str(self.client_pids[number - 1])],
@@ -159,6 +161,7 @@ class Session:
             self.server.command(number, 'raw', message='SendGameListing', payload={})
             self.server.command(number, 'lanjoin', gameName=self.game_name, keepProvider=True)
         self._wait(lambda: self.control('status').startswith('Playing'), timeout, 'the game to start')
+        self.client_slots = sorted(int(pid) - 1 for pid in re.findall(r'\| p(\d+) ', self.control('status')))
         if self.library:
             self._wait(lambda: all(self.beat(i) for i in range(config.clients)), 30,
                        "the library's first heartbeat on every client")
@@ -175,8 +178,6 @@ class Session:
         config = self.config
         folder = self.staged_map.parent
         folder.mkdir(parents=True, exist_ok=True)
-        if config.clients > 1:
-            self._link_alt_maps()
         seat = config.seat if config.active else None
         if config.inject:
             command = [str(config.host_binary), 'inject', '--map', str(config.map_file), '--out', str(self.staged_map),
@@ -190,17 +191,6 @@ class Session:
                 self.log(f'no library: {done.stderr.strip().splitlines()[0] if done.stderr.strip() else "inject failed"}')
         if not self.library:
             shutil.copyfile(config.map_file, self.staged_map)
-
-    def _link_alt_maps(self):
-        """The second client's Maps folder must see the same map: link the folder over."""
-        alt = self.config.alt_home / MAPS / self.config.map_folder
-        if alt.is_symlink() or alt.exists():
-            if alt.resolve() != self.staged_map.parent.resolve():
-                raise RuntimeError(f'{alt} exists and is not a link to {self.staged_map.parent}; move it away')
-            return
-        alt.parent.mkdir(parents=True, exist_ok=True)
-        alt.symlink_to(self.staged_map.parent)
-        self.log(f'linked {alt} -> {self.staged_map.parent}')
 
     def _start_host(self):
         config = self.config
@@ -219,10 +209,10 @@ class Session:
 
     def _collect(self):
         """Copies each client's trace into this game's artifacts."""
-        for index, home in enumerate(self.homes):
-            target = self.artifacts / f'trace-client{index + 1}'
+        for slot in self.client_slots:
+            target = self.artifacts / f'trace-p{slot}'
             target.mkdir(parents=True, exist_ok=True)
-            for chunk in trace.data_folder(home).glob(trace.TRACE + '-*.txt'):
+            for chunk in trace.chunks(self.data, slot):
                 shutil.copy(chunk, target / chunk.name)
 
     def _stop_host(self):
@@ -249,7 +239,7 @@ class Session:
         """What `slop down` and later commands need to find this session again."""
         state = dict(name=self.name, game_name=self.game_name, artifacts=str(self.artifacts), host_pid=self.host_pid,
                      client_pids=self.client_pids, started_server=self.started_server, library=self.library,
-                     seat=self.seat)
+                     seat=self.seat, client_slots=self.client_slots)
         (self.config.runs / 'session.json').write_text(json.dumps(state, indent=1))
         self.saved = True
 
@@ -263,6 +253,7 @@ class Session:
         session.game_name, session.artifacts = state['game_name'], pathlib.Path(state['artifacts'])
         session.host_pid, session.client_pids = state['host_pid'], state['client_pids']
         session.started_server, session.library, session.seat = state['started_server'], state['library'], state['seat']
+        session.client_slots = state.get('client_slots', [])
         session.saved = True
         return session
 
@@ -297,7 +288,7 @@ class Session:
         """Runs a command as that client's own player through the file channel: no host seat
         needed, only the library."""
         self._need_library()
-        names = trace.write_command(trace.data_folder(self.homes[client]), line, int(time.time() * 1000) % 10**9)
+        names = trace.write_command(self.data, self.client_slots[client], line, int(time.time() * 1000) % 10**9)
         if names is None:
             raise TestFailed(f'client {client} is not polling for commands')
 
@@ -320,7 +311,7 @@ class Session:
     # --- reading -----------------------------------------------------------------------------------
 
     def trace(self, client=0):
-        return trace.read(trace.data_folder(self.homes[client]))
+        return trace.read(self.data, self.client_slots[client])
 
     def beat(self, client=0):
         """The newest heartbeat of a client: game state as of the last whole second."""

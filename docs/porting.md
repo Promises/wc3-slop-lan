@@ -20,7 +20,7 @@ Work through it in order: each step depends on the one before it.
 | The join burst (0x59 skins/profile messages) | `host/src/game.rs` | maybe (Flo tracks it) | no |
 | Web UI message names (`PlayOffline`, `SendGameListing`, `InitializeLocalNetProvider`, `ScoreScreenClose`) | `harness/webui/index.html` | maybe | no |
 | Install paths, the game binary, the webui folder | `slop.toml` `[game]` | no | **yes** |
-| A second data folder (`HOME`, `CFFIXED_USER_HOME`) | `harness/slop/session.py` | no | **yes** |
+| The data folder (where CustomMapData is) | `harness/slop/trace.py` (`data_folder`) | no | **yes** |
 | Process tools (`pgrep`, `lsof`, `kill`, `screencapture`, `yabai`) | `harness/slop/*.py`, `harness/*.sh` | no | **yes** |
 | Writing the library into a map (StormLib paths) | `host/src/inject.rs` | no | Windows: not implemented |
 | The map library itself | `library/slop.lua` | only if natives change | no |
@@ -146,8 +146,8 @@ SLOP_MAP=<a melee map> ./slop -c examples/any-map/slop.toml test      # hidden h
 
 ## 2. Windows
 
-**Status: not attempted.** The host and the library are portable; activation, data folders and
-process handling are not.
+**Status: not attempted.** The host and the library are portable; activation, paths and process
+handling are not.
 
 ### 2.1 Game, paths, launching
 
@@ -156,15 +156,9 @@ process handling are not.
 - **Launching:** the flags `-launch`, `-windowmode windowed` and `-nowfpause` are the same.
   Check that `-editor` still skips the Battle.net login when the game is started directly
   (lead).
-- **Data folder:** the default is `Documents\Warcraft III` (CustomMapData, Maps, logs).
-  `HOME`/`CFFIXED_USER_HOME` mean nothing on Windows, and two clients still need two data
-  folders. Leads:
-  - look for a command-line option that moves the user folder (`strings` on the exe, look for
-    `-` options near "Documents");
-  - a second Windows user started with `runas`;
-  - a junction swapped between launches (fragile).
-
-  Check how W3Champions starts two games, if it does.
+- **Data folder:** the default is `Documents\Warcraft III` (CustomMapData, Maps, logs); point
+  `trace.data_folder` at it. Both clients share it, as on macOS, since the library names its
+  files by player. Check that two games run side by side on one folder there too (lead).
 
 ### 2.2 Activation
 
@@ -205,7 +199,6 @@ process handling are not.
 | `lsof -ti tcp:<port> -sTCP:LISTEN` | `netstat -ano`, or `psutil.net_connections()` |
 | `harness/activate.sh`, `harness/wc3.sh` (bash) | Python equivalents (wc3.sh is thin: POSTs to the server) |
 | `screencapture -l <window id>` + yabai | `PrintWindow`, or a capture library, by window handle |
-| `HOME=` for the second client | whatever 2.1 finds |
 
 `harness/slop/session.py` holds almost all of this, in `start`, `_client_pid` and `stop`.
 Isolating it behind a small platform module is the clean way in.
@@ -217,15 +210,15 @@ Wine, while the host and harness run natively on Linux.
 
 ### 3.1 Clients
 
-- **Data folders come for free.** Each Wine prefix has its own
-  `drive_c/users/<user>/Documents/Warcraft III`, so two prefixes are two clients:
+- **One prefix for both clients**, as on macOS: the library names its files by player, so both
+  games can use the prefix's `drive_c/users/<user>/Documents/Warcraft III`:
   ```sh
-  WINEPREFIX=~/wc3-a wine "C:/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe" -launch -windowmode windowed -nowfpause
-  WINEPREFIX=~/wc3-b wine ...
+  WINEPREFIX=~/wc3 wine "C:/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe" -launch -windowmode windowed -nowfpause
   ```
-- **Sharing the map:** link each prefix's `Maps/<folder>` to one folder, as the harness does for
-  `alt_home`.
-- **The install:** can be shared (one prefix with the game, symlinked into the other) or copied.
+  (twice). Point `trace.data_folder` at that Documents folder. If two games in one prefix fight
+  (a single wineserver shares state), a second prefix with its `Maps/<folder>` linked to the
+  first is the fallback.
+- **The install:** Battle.net under Wine is the usual way to install it (Lutris has scripts).
   Battle.net under Wine is the usual way to install it (Lutris has scripts).
 - **Launching directly:** check that `-editor` skips the login when the exe is started directly
   under Wine (lead).

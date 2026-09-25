@@ -110,4 +110,5 @@ A preload file (`Preloader(name)`) runs as script. A command file sets an abilit
   nothing once the game is on.
 - **Missing names are remembered.** A name asked for while the file doesn't exist is treated as
   missing for good. So the library asks for a new name every poll, publishes the number in
-  `slop-beat.txt`, and the writer fills a few names just ahead of it.
+  `slop-beat-p<slot>.txt`, and the writer fills a few names just ahead of it
+  (`slop-cmd-p<slot>-NNNN.txt`).

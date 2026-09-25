@@ -29,7 +29,6 @@ inject = true                  # put slop.lua into the staged copy (Lua maps; JA
 [clients]
 count = 2                      # 1 or 2
 names = ["red", "blue"]        # player names, one per client
-alt_home = "~/BattleNet-alt"   # the second client's data folder
 
 [tests]
 file = "tests.py"

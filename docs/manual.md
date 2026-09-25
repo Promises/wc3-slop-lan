@@ -11,7 +11,6 @@ SLOP=~/path/to/wc3-slop-lan
 MAP=~/path/to/MyMap.w3x
 GAME="/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III"
 MAPS="$HOME/Library/Application Support/Blizzard/Warcraft III/Maps"
-ALT="$HOME/BattleNet-alt"
 BIN="$SLOP/host/target/debug/wc3-slop-lan"
 WC3="$SLOP/harness/wc3.sh"
 ```
@@ -29,15 +28,11 @@ mkdir -p "$MAPS/slop"
 `--seat auto` picks the first slot the map doesn't define. `map` prints it as `free slot`, and
 the host must use the same one (step 5).
 
-## 2. A second data folder (once)
+## 2. One data folder for both
 
-The second client runs with `HOME` pointed at `$ALT`. Only its Maps folder has to be shared, so
-link it to the staged map's folder:
-
-```sh
-mkdir -p "$ALT/Library/Application Support/Blizzard/Warcraft III/Maps"
-ln -s "$MAPS/slop" "$ALT/Library/Application Support/Blizzard/Warcraft III/Maps/slop"
-```
+Both clients use your normal data folder (`~/Library/Application Support/Blizzard/Warcraft III`),
+so both see the staged map. The library keeps their files apart by naming each file after the
+player that client plays: `slop-trace-p0-0001.txt`, `slop-beat-p1.txt`.
 
 ## 3. The page and its server
 
@@ -71,7 +66,7 @@ the clients one at a time so you know which is which.
 ```sh
 "$GAME" -editor -launch -windowmode windowed -nowfpause > /dev/null 2>&1 &
 "$WC3" who          # wait for number 1; the key is the game's web UI port
-HOME="$ALT" CFFIXED_USER_HOME="$ALT" "$GAME" -editor -launch -windowmode windowed -nowfpause > /dev/null 2>&1 &
+"$GAME" -editor -launch -windowmode windowed -nowfpause > /dev/null 2>&1 &
 "$WC3" who          # wait for number 2
 "$WC3" raw 1 PlayOffline '{}'
 "$WC3" raw 2 PlayOffline '{}'
@@ -126,11 +121,12 @@ ctl type -help                 # the seat types "-help" (map chat triggers; unve
 ctl chat hello                 # a line on everyone's screen
 ```
 
-The trace is in each client's CustomMapData: `~/Library/.../CustomMapData/slop-trace-*.txt` for
-client 1, the same under `$ALT` for client 2. If the clients part ways, the host logs
-`DESYNC at tick N`.
+The traces are in `~/Library/Application Support/Blizzard/Warcraft III/CustomMapData/`, one per
+player: `slop-trace-p0-*.txt` from red's game, `slop-trace-p1-*.txt` from blue's. If the clients
+part ways, the host logs `DESYNC at tick N`.
 
-With a hidden host, commands go through a client's file channel instead: `"$WC3" cmd 1 .gold 5000`.
+With a hidden host, commands go through a client's file channel instead, as the player that
+game plays: `"$WC3" cmd 1 p0 .gold 5000` (both games poll the same folder, so name the player).
 
 ## 8. Stop
 
