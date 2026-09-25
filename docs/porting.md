@@ -19,8 +19,8 @@ Work through it in order: each step depends on the one before it.
 | Discovery (product `PX3W`, version 10200, port 16000) | `host/src/discovery.rs` | the version, maybe | no |
 | The join burst (0x59 skins/profile messages) | `host/src/game.rs` | maybe (Flo tracks it) | no |
 | Web UI message names (`PlayOffline`, `SendGameListing`, `InitializeLocalNetProvider`, `ScoreScreenClose`) | `harness/webui/index.html` | maybe | no |
-| Install paths, the game binary, the webui folder | `slop.toml` `[game]` | no | **yes** |
-| The data folder (where CustomMapData is) | `harness/slop/trace.py` (`data_folder`) | no | **yes** |
+| Install paths, the game binary, the webui folder, launch arguments | `configuration.toml` `[game]` | no | **yes** |
+| The data folder (Maps, CustomMapData) | `configuration.toml` `[game]` (`data`) | no | **yes** |
 | Process tools (`pgrep`, `lsof`, `kill`, `screencapture`, `yabai`) | `harness/slop/*.py`, `harness/*.sh` | no | **yes** |
 | Writing the library into a map (StormLib paths) | `host/src/inject.rs` | no | Windows: not implemented |
 | The map library itself | `library/slop.lua` | only if natives change | no |
@@ -139,9 +139,9 @@ something by hand and read the log to learn its messages.
 ### 1.7 Everything together
 
 ```sh
-./slop -c examples/any-map/slop.toml check
-SLOP_MAP=<a melee map> ./slop -c examples/any-map/slop.toml test      # hidden host, the least moving parts
-./slop -c examples/warcraft-maul/slop.toml test                        # active host, library, hooks
+./slop check
+./slop test any-map          # hidden host, a melee map: the least moving parts
+./slop test warcraft-maul    # active host, library, hooks
 ```
 
 ## 2. Windows
@@ -152,12 +152,13 @@ handling are not.
 ### 2.1 Game, paths, launching
 
 - **Game:** `C:\Program Files (x86)\Warcraft III\_retail_\x86_64\Warcraft III.exe` (check your
-  install). The page goes into `_retail_\webui\`. Set both in `slop.toml`'s `[game]`.
+  install). The page goes into `_retail_\webui\`. Set both in `configuration.toml` (its Windows lines
+  are there, commented).
 - **Launching:** the flags `-launch`, `-windowmode windowed` and `-nowfpause` are the same.
   Check that `-editor` still skips the Battle.net login when the game is started directly
   (lead).
-- **Data folder:** the default is `Documents\Warcraft III` (CustomMapData, Maps, logs); point
-  `trace.data_folder` at it. Both clients share it, as on macOS, since the library names its
+- **Data folder:** the default is `Documents\Warcraft III` (CustomMapData, Maps, logs); set
+  `data` in `configuration.toml` to it. Both clients share it, as on macOS, since the library names its
   files by player. Check that two games run side by side on one folder there too (lead).
 
 ### 2.2 Activation
@@ -215,7 +216,8 @@ Wine, while the host and harness run natively on Linux.
   ```sh
   WINEPREFIX=~/wc3 wine "C:/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe" -launch -windowmode windowed -nowfpause
   ```
-  (twice). Point `trace.data_folder` at that Documents folder. If two games in one prefix fight
+  (twice). In `configuration.toml`'s `[game]`: `launcher = ["env", "WINEPREFIX=...", "wine"]`, `binary` and `webui`
+  inside the prefix, and `data` at that Documents folder. If two games in one prefix fight
   (a single wineserver shares state), a second prefix with its `Maps/<folder>` linked to the
   first is the fallback.
 - **The install:** Battle.net under Wine is the usual way to install it (Lutris has scripts).

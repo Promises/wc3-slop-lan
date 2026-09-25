@@ -1,9 +1,16 @@
-"""slop: the harness from the command line. Everything it needs comes from slop.toml (-c to pick
-one, else $SLOP_CONFIG, else ./slop.toml). See docs/harness.md.
+"""slop: the harness from the command line.
 
-  slop check                  is everything in place for this config?
-  slop up [--build]           start a game and leave it running
-  slop down                   stop it
+A map is a folder under maps/ with a slop.toml; name it, or leave it out for the default map
+(configuration.toml's `map`), or give any slop.toml with -c. See docs/harness.md.
+
+  slop maps                   the maps there are, and which is the default
+  slop check [map]            is everything in place? (changes nothing)
+  slop up [map] [--build]     start a game and leave it running
+  slop test [map] [--build] [--fresh] [--only NAME ...]
+                              run the map's tests, each on a fresh game
+  slop mcp [map]              serve the harness to an MCP client over stdio
+
+The running game (from `slop up`), whichever map it is:
   slop status                 the host's view of it
   slop cmd <player> <line>    run a command line as a player (0-based slot) on every client
   slop type <text>            type a chat line as the host's seat
@@ -11,8 +18,7 @@ one, else $SLOP_CONFIG, else ./slop.toml). See docs/harness.md.
   slop file <client> <line>   a command through a client's file channel, as its own player
   slop state [client]         the newest heartbeat
   slop trace [client] [n]     the last n trace lines
-  slop test [--build] [--fresh] [name]  run the config's tests, each on a fresh game
-  slop mcp                    serve the harness to an MCP client over stdio
+  slop down                   stop it
 """
 import argparse
 import json
@@ -33,11 +39,13 @@ def check(config):
         problems.append(text)
         print(f'  MISSING {text}')
 
-    ok(f'config {config.path}')
-    (ok if config.map_file.is_file() else bad)(f'map {config.map_file}'
+    ok(f'map {config.name} ({config.path})')
+    ok(f'configuration {config.configuration or "defaults (no configuration.toml; see configuration.example.toml)"}')
+    (ok if config.map_file.is_file() else bad)(f'map file {config.map_file}'
                                                + ('' if config.map_file.is_file() or not config.build else f' (build: {config.build})'))
     (ok if config.game.exists() else bad)(f'game {config.game}')
     (ok if config.webui_dir.is_dir() else bad)(f"the game's webui folder {config.webui_dir}")
+    (ok if config.data.is_dir() else bad)(f"the game's data folder {config.data}")
     (ok if config.host_binary.exists() else bad)(f'host {config.host_binary}' + ('' if config.host_binary.exists() else ' (slop up builds it; needs cargo)'))
     for tool in ('lldb', 'lsof', 'curl'):
         (ok if shutil.which(tool) else bad)(f'{tool} on PATH')
@@ -61,15 +69,17 @@ def check(config):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='slop', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('-c', '--config', help='the slop.toml to use')
+    parser.add_argument('-c', '--config', help='a slop.toml to use instead of a map from maps/')
     commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('check')
-    for name in ('up', 'test'):
+    commands.add_parser('maps')
+    for name in ('check', 'up', 'test', 'mcp'):
         sub = commands.add_parser(name)
-        sub.add_argument('--build', action='store_true', help="run the config's map.build first")
+        sub.add_argument('map', nargs='?', help='a folder under maps/ (default: configuration.toml\'s map)')
+        if name in ('up', 'test'):
+            sub.add_argument('--build', action='store_true', help="run the map's map.build first")
         if name == 'test':
             sub.add_argument('--fresh', action='store_true', help='launch the clients again for every test')
-            sub.add_argument('names', nargs='*')
+            sub.add_argument('--only', action='append', default=[], metavar='NAME', help='run only this test')
     commands.add_parser('down')
     commands.add_parser('status')
     sub = commands.add_parser('cmd')
@@ -87,13 +97,20 @@ def main(argv=None):
     sub = commands.add_parser('trace')
     sub.add_argument('client', type=int, nargs='?', default=0)
     sub.add_argument('lines', type=int, nargs='?', default=30)
-    commands.add_parser('mcp')
     args = parser.parse_args(argv)
     # Progress must show up as it happens, also when the output goes to a file or a pipe
     sys.stdout.reconfigure(line_buffering=True)
 
     try:
-        config = config_module.load(args.config)
+        if args.command == 'maps':
+            default = config_module.configuration()[0]['map']
+            for name in config_module.available_maps():
+                print(f'{name}{"   (default)" if name == default else ""}')
+            return 0
+        if args.command in ('check', 'up', 'test', 'mcp'):
+            config = config_module.load(args.config, args.map)
+        elif args.config or getattr(args, 'map', None):
+            sys.exit(f'slop {args.command} works on the running game; it takes no map')
     except config_module.ConfigError as problem:
         sys.exit(str(problem))
 
@@ -110,16 +127,17 @@ def main(argv=None):
                 session.stop()
                 raise
             act = 'slop cmd 0 .gold 5000' if session.seat is not None else 'slop file 0 .gold 5000'
-            print(f'up, and left running: `slop status`, `{act}`, `slop state`; `slop down` when done')
+            print(f'{config.name} is up, and left running: `slop status`, `{act}`, `slop state`; '
+                  f'`slop down` when done')
             return 0
         if args.command == 'test':
             ensure_host_binary(config)
-            return 0 if runner.run(config, args.names, reuse=not args.fresh) else 1
+            return 0 if runner.run(config, args.only, reuse=not args.fresh) else 1
         if args.command == 'mcp':
             mcp.serve(config)
             return 0
 
-        session = Session.resume(config)
+        session = Session.resume()
         if args.command == 'down':
             session.stop()
         elif args.command == 'status':
@@ -140,5 +158,5 @@ def main(argv=None):
         elif args.command == 'trace':
             print('\n'.join(session.trace(args.client)[-args.lines:]))
         return 0
-    except (RuntimeError, TestFailed, OSError, subprocess.CalledProcessError) as problem:
+    except (RuntimeError, TestFailed, OSError, subprocess.CalledProcessError, config_module.ConfigError) as problem:
         sys.exit(f'slop {args.command}: {problem}')

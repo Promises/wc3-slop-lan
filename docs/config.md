@@ -1,17 +1,39 @@
-# slop.toml
+# Configuration
 
-The harness reads everything from one file, so a run is `./slop up` or `./slop test`.
+Two kinds of file, so a run is `./slop up` rather than a long command line:
 
-**Which file.** `-c <file>`, else `$SLOP_CONFIG`, else `./slop.toml`.
+| file | says | where | |
+|---|---|---|---|
+| `configuration.toml` | the default map, and how to run Warcraft III on this machine | the repo root | optional: the defaults fit a standard macOS install |
+| `slop.toml` | what to play and how to test it | one per map, in `maps/<name>/` | one per map |
 
-**Paths.** Relative paths are resolved from the file's own folder. They may start with `~`, and
-may use `${VAR}` or `${VAR:-default}`.
+- **Paths** in both are resolved from the file's own folder. They may start with `~`, and may
+  use `${VAR}` or `${VAR:-default}`.
+- **Unknown keys** are errors, so a typo can't be silently ignored.
 
-**Unknown keys** are errors, so a typo can't be silently ignored.
+## Maps
+
+A map is a folder under `maps/`:
+
+```
+maps/
+  any-map/          slop.toml, tests.py, (2)Hammerfall_S3.w3x
+  warcraft-maul/    slop.toml, tests.py (its map is loaded from the map's own repo)
+```
+
+**Picking a map for a command:**
+- by folder name: `./slop up warcraft-maul`;
+- leave it out for the default map: `./slop up`;
+- or give any `slop.toml`, anywhere: `./slop -c path/to/slop.toml up`.
+
+`./slop maps` lists the maps, and shows which one is the default. To add a map, make a folder
+beside these with a `slop.toml`, and the map file too unless `map.file` points elsewhere.
+
+## slop.toml
 
 ```toml
 [map]
-file = "dist/bin/map.w3x"      # required: the map to play; a build output is fine
+file = "dist/bin/map.w3x"      # the map to play; left out: the one .w3x/.w3m next to this file
 folder = "slop"                # staged as Maps/<folder>/<file name>
 build = "npm run build:dev"    # optional: run first with `slop up --build` / `slop test --build`
 build_dir = "."                # where build runs
@@ -32,12 +54,44 @@ names = ["red", "blue"]        # player names, one per client
 
 [tests]
 file = "tests.py"
+```
+
+**`map.file`** is the only part a map usually needs, and only when the map isn't in its
+folder. A build output elsewhere is the typical case: Warcraft Maul's points at the map repo's
+`dist/bin/map.w3x`.
+
+## configuration.toml
+
+Settings for this machine, the same for every map: which map to use when none is named, and
+how to run the game. Copy `configuration.example.toml` to `configuration.toml` and change what
+differs; git ignores `configuration.toml`. Without one, the example's values are used, and
+`./slop check` says which is in use.
+
+```toml
+map = "any-map"                    # the default map: a folder under maps/
 
 [game]
-server = "http://127.0.0.1:8777"   # the web UI server; the page expects this port
-# binary = "/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III"
-# webui = "/Applications/Warcraft III/_retail_/webui"
+binary = "/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III"
+webui = "/Applications/Warcraft III/_retail_/webui"        # the harness puts its page here
+data = "~/Library/Application Support/Blizzard/Warcraft III"  # holds Maps and CustomMapData
+args = ["-editor", "-launch", "-windowmode", "windowed", "-nowfpause"]
+launcher = []                      # put in front of the binary, e.g. ["env", "WINEPREFIX=...", "wine"]
+server = "http://127.0.0.1:8777"   # the web UI server; written into the page when it is installed
 ```
+
+A `configuration.toml` only needs the keys it changes. For example, this is a whole one:
+
+```toml
+map = "warcraft-maul"
+```
+
+**How `[game]` is used:**
+- The harness launches each client with `launcher + binary + args`.
+- It stages maps under `data/Maps`, and reads traces from `data/CustomMapData`.
+- Activation (`harness/activate.sh`) gets the binary from the harness. Run by hand, it assumes
+  the standard macOS install unless `WC3_GAME` says otherwise.
+- `configuration.example.toml` has Windows and Wine lines, commented out; see
+  [porting.md](porting.md).
 
 ## Choosing the host mode
 
@@ -56,8 +110,10 @@ server = "http://127.0.0.1:8777"   # the web UI server; the page expects this po
   (`seat = "auto"`), which most maps never look at. A map that loops over all 24 slots should
   skip `Slop.seat`; see [library.md](library.md#the-seat).
 
-## Examples
+## The shipped maps
 
-- **`examples/any-map/slop.toml`**: a hidden host, the map from `$SLOP_MAP`.
-- **`examples/warcraft-maul/slop.toml`**: an active host at a fixed seat, a build step, and
-  paths into a neighbouring repo through `${WC3_MAUL:-...}`.
+- **`maps/any-map`**: a hidden host, and `(2)Hammerfall_S3.w3x` right there, so it needs no
+  `map.file`. Hammerfall is a W3Champions ladder map (Season 9), included as a small, ordinary
+  melee map to try things on.
+- **`maps/warcraft-maul`**: an active host at a fixed seat, a build step, and `map.file` into
+  the neighbouring map repo through `${WC3_MAUL:-...}`.

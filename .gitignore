@@ -2,4 +2,4 @@ target/
 captures/
 .slop/
 __pycache__/
-maps/
+configuration.toml

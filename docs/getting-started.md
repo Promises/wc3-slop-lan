@@ -6,27 +6,31 @@
   Other builds are refused, because activation depends on the exact game binary; see
   [protocol.md](protocol.md).
 - **Python 3.11 or later.** The harness uses only the standard library.
-- **Rust** ([rustup.rs](https://rustup.rs)) and Xcode's command line tools, to build the host.
-  StormLib is compiled from C along the way.
+- **Rust** ([rustup.rs](https://rustup.rs)), Xcode's command line tools
+  (`xcode-select --install`) and **CMake** (`brew install cmake`), to build the host. StormLib
+  is compiled from C along the way.
 - **The debugger allowed to attach to the game.** It is `lldb`, from Xcode's command line tools.
   If activation reports that it can't attach, `sudo DevToolsSecurity -enable` is the usual fix.
 
 Nothing needs Battle.net. The clients start with `-editor`, which skips the login, and go offline.
 
+With the game anywhere but `/Applications/Warcraft III`, copy `configuration.example.toml` to
+`configuration.toml` and fix the paths there (see [config.md](config.md#configurationtoml)).
+
 ## 2. Check
 
 ```sh
-./slop -c examples/any-map/slop.toml check
+./slop check
 ```
 
 `check` lists what's there and what's missing, and changes nothing. With
-`SLOP_MAP=/path/to/map.w3x` set, it also reads the map: its human slots, and where an active
+a map it can read, it also reads the map: its human slots, and where an active
 host's seat would go.
 
 ## 3. A first run
 
 ```sh
-SLOP_MAP=/path/to/map.w3x ./slop -c examples/any-map/slop.toml test
+./slop test
 ```
 
 For each test this:
@@ -50,8 +54,8 @@ the host's log, and each client's trace when the map is a Lua map.
 
 ## 4. Your own map
 
-Copy `examples/any-map/slop.toml` next to your map project and edit it (see
-[config.md](config.md)):
+Make a folder for it under `maps/`, like `maps/any-map`: a `slop.toml`, a `tests.py`, and the
+map file (see [config.md](config.md)):
 
 - `map.file`: your build output; `map.build`: how to build it (`./slop test --build`).
 - `host.mode = "active"`, if tests should send commands through the host's seat. The seat is a
@@ -64,5 +68,5 @@ Then `./slop test`, or `./slop up` to play along by hand.
 ## 5. Going further
 
 - Give your map hooks, so tests can use its own commands and read its own state:
-  [library.md](library.md), and `examples/warcraft-maul` for a full set.
+  [library.md](library.md), and `maps/warcraft-maul` for a full set.
 - Let an AI agent play: `./slop mcp`, see [harness.md](harness.md#mcp).

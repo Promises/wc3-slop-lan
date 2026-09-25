@@ -1,7 +1,12 @@
-"""slop.toml: what to play and how, so a run is `slop up` rather than a long command line.
+"""The two config files.
 
-Paths are relative to the config file, may start with ~, and may use ${VAR} or ${VAR:-default}.
-Every key but map.file has a default; see examples/ and docs/config.md.
+- configuration.toml (at the repo root, optional): how to run Warcraft III on this machine, and
+  which map to use when none is named. Its defaults are configuration.example.toml's values.
+- slop.toml, one per map, in maps/<name>/: what to play and how to test it.
+
+A map is named by its folder under maps/ (`slop up warcraft-maul`), or given as a path to its
+slop.toml (`slop -c path/to/slop.toml up`). Paths in both files are relative to the file they
+are in, may start with ~, and may use ${VAR} or ${VAR:-default}. See docs/config.md.
 """
 import os
 import pathlib
@@ -10,7 +15,11 @@ import tomllib
 from dataclasses import dataclass, field
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+MAPS = REPO / 'maps'
 CONFIG_NAME = 'slop.toml'
+CONFIGURATION = REPO / 'configuration.toml'
+CONFIGURATION_EXAMPLE = REPO / 'configuration.example.toml'
+MAP_FILES = ('*.w3x', '*.w3m')
 
 
 class ConfigError(ValueError):
@@ -38,18 +47,40 @@ class Config:
     names: list = field(default_factory=lambda: ['red', 'blue'])
     # [tests]
     tests_file: pathlib.Path | None = None
-    # [game]
-    server: str = 'http://127.0.0.1:8777'
-    game: pathlib.Path = pathlib.Path('/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III')
-    webui_dir: pathlib.Path = pathlib.Path('/Applications/Warcraft III/_retail_/webui')
+    # configuration.toml [game]
+    configuration: pathlib.Path | None = None
+    game: pathlib.Path | None = None
+    webui_dir: pathlib.Path | None = None
+    data: pathlib.Path | None = None
+    args: list = field(default_factory=list)
+    launcher: list = field(default_factory=list)
+    server: str = ''
 
     @property
     def root(self):
         return self.path.parent
 
     @property
+    def name(self):
+        """The map's name: its folder under maps/, or its slop.toml's path elsewhere."""
+        return self.root.name if self.root.parent == MAPS else str(self.path)
+
+    @property
     def active(self):
         return self.host_mode == 'active'
+
+    @property
+    def maps(self):
+        return self.data / 'Maps'
+
+    @property
+    def custom_map_data(self):
+        return self.data / 'CustomMapData'
+
+    @property
+    def launch(self):
+        """The command that starts one client."""
+        return [*self.launcher, str(self.game), *self.args]
 
     @property
     def runs(self):
@@ -65,25 +96,72 @@ def _expand(value):
     return os.path.expanduser(re.sub(r'\$\{(\w+)(:-([^}]*))?\}', replace, value))
 
 
-def find(explicit=None):
-    """The config to use: the one named, else $SLOP_CONFIG, else ./slop.toml."""
-    chosen = explicit or os.environ.get('SLOP_CONFIG') or CONFIG_NAME
-    path = pathlib.Path(chosen).expanduser().resolve()
+def available_maps():
+    """The maps under maps/, by name."""
+    return sorted(p.parent.name for p in MAPS.glob(f'*/{CONFIG_NAME}'))
+
+
+def configuration():
+    """configuration.toml over the example's values: (the merged table, the file or None)."""
+    merged = tomllib.loads(CONFIGURATION_EXAMPLE.read_text())
+    if not CONFIGURATION.is_file():
+        return merged, None
+    own = tomllib.loads(CONFIGURATION.read_text())
+    for key, value in own.items():
+        if key not in merged:
+            raise ConfigError(f'{CONFIGURATION.name}: unknown key {key}')
+        if isinstance(value, dict):
+            for inner in value:
+                if inner not in merged[key]:
+                    raise ConfigError(f'{CONFIGURATION.name}: unknown key {key}.{inner}')
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged, CONFIGURATION
+
+
+def find(explicit=None, map_name=None):
+    """The slop.toml to use: the path given with -c, else the map named, else the default map
+    from configuration.toml."""
+    if explicit:
+        path = pathlib.Path(explicit).expanduser().resolve()
+        if not path.is_file():
+            raise ConfigError(f'no config at {path}')
+        return path
+    name = map_name or configuration()[0]['map']
+    path = MAPS / name / CONFIG_NAME
     if not path.is_file():
-        raise ConfigError(f'no config at {path} (give one with -c, or see examples/)')
+        known = ', '.join(available_maps()) or 'none'
+        raise ConfigError(f'no map called {name!r} (maps/: {known})')
     return path
 
 
-def load(explicit=None):
-    path = find(explicit)
+def _map_file(path, given):
+    """map.file, or the one map file next to the slop.toml."""
+    if given is not None:
+        expanded = _expand(str(given))
+        if not expanded:
+            raise ConfigError(f'{path}: map.file is empty after expanding {given!r}')
+        return (path.parent / expanded).resolve()
+    found = sorted(f for pattern in MAP_FILES for f in path.parent.glob(pattern))
+    if len(found) != 1:
+        raise ConfigError(f'{path}: no map.file, and {len(found)} map files next to it '
+                          f'({", ".join(f.name for f in found) or "none"}); put one there or set map.file')
+    return found[0]
+
+
+def load(explicit=None, map_name=None):
+    path = find(explicit, map_name)
     raw = tomllib.loads(path.read_text())
     known = {'map': {'file', 'folder', 'build', 'build_dir'},
              'host': {'mode', 'seat', 'prefix', 'control', 'binary'},
              'library': {'inject'},
              'clients': {'count', 'names'},
-             'tests': {'file'},
-             'game': {'server', 'binary', 'webui'}}
+             'tests': {'file'}}
     for section, values in raw.items():
+        if section == 'game':
+            raise ConfigError(f'{path.name}: [game] belongs in {CONFIGURATION.name} at the repo root '
+                              f'(see {CONFIGURATION_EXAMPLE.name})')
         if section not in known or not isinstance(values, dict):
             raise ConfigError(f'{path.name}: unknown section [{section}]')
         for key in values:
@@ -96,9 +174,7 @@ def load(explicit=None):
     def resolve(value):
         return (path.parent / _expand(value)).resolve() if value is not None else None
 
-    if not _expand(str(get('map', 'file', ''))):
-        raise ConfigError(f'{path.name}: map.file is required (empty after expanding {get("map", "file")!r}?)')
-    config = Config(path=path, map_file=resolve(get('map', 'file')))
+    config = Config(path=path, map_file=_map_file(path, get('map', 'file')))
     config.map_folder = get('map', 'folder', config.map_folder)
     config.build = get('map', 'build')
     config.build_dir = resolve(get('map', 'build_dir', '.'))
@@ -112,11 +188,7 @@ def load(explicit=None):
     config.clients = int(get('clients', 'count', config.clients))
     config.names = list(get('clients', 'names', config.names))
     config.tests_file = resolve(get('tests', 'file'))
-    config.server = get('game', 'server', config.server)
-    if get('game', 'binary'):
-        config.game = resolve(get('game', 'binary'))
-    if get('game', 'webui'):
-        config.webui_dir = resolve(get('game', 'webui'))
+    _load_game(config)
 
     if config.host_mode not in ('active', 'hidden'):
         raise ConfigError(f'{path.name}: host.mode is "active" or "hidden", not {config.host_mode!r}')
@@ -127,3 +199,18 @@ def load(explicit=None):
     if len(config.names) < config.clients:
         raise ConfigError(f'{path.name}: clients.names needs a name per client')
     return config
+
+
+def _load_game(config):
+    table, source = configuration()
+    game = table['game']
+    base = (source or CONFIGURATION_EXAMPLE).parent
+
+    def resolve(key):
+        return (base / _expand(game[key])).resolve()
+
+    config.configuration = source
+    config.game, config.webui_dir, config.data = resolve('binary'), resolve('webui'), resolve('data')
+    config.args = [_expand(str(a)) for a in game['args']]
+    config.launcher = [_expand(str(a)) for a in game['launcher']]
+    config.server = game['server'].rstrip('/')

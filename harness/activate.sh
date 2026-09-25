@@ -30,7 +30,8 @@ print(next((k for k, v in json.load(sys.stdin).items() if str(v["number"]) == sy
   [[ -n "$pid" ]] || { echo "instance $instance's game (port $port) is gone" >&2; exit 1; }
 fi
 
-GAME="/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III"
+# The harness passes the game from configuration.toml; by hand, the standard macOS install
+GAME="${WC3_GAME:-/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III}"
 UUID="C26F6D81-E702-3F44-B57E-91DD7C438B22"
 SITE=0x100d3c6a2        # call SelectNetProvider; the mov edi,'LOOP' is the 5 bytes before
 if ! dwarfdump --uuid "$GAME" | grep -q "$UUID"; then

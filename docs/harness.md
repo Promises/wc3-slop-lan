@@ -10,9 +10,13 @@ and waits until the game is on.
 ```
 ./slop [-c slop.toml] <command>
 
-check                  is everything in place for this config? (changes nothing)
-up [--build]           start a game and leave it running
-down                   stop it
+maps                   the maps under maps/, and which is the default
+check [map]            is everything in place? (changes nothing)
+up [map] [--build]     start a game and leave it running
+test [map] [--build] [--fresh] [--only NAME ...]
+                       run the map's tests, each on a fresh game
+mcp [map]              serve the harness to an MCP client over stdio
+
 status                 the host's view: phase, ticks, seat, each player
 cmd <player> <line>    run a command line as a player (0-based slot) on every client
 type <text>            type a chat line as the host's seat
@@ -20,13 +24,14 @@ ctl <line>             any host control command (docs/host.md)
 file <client> <line>   a command through a client's file channel, as that client's own player
 state [client]         the newest heartbeat, as JSON
 trace [client] [n]     the last n trace lines
-test [--build] [--fresh] [name]  run the config's tests, each on a fresh game
-mcp                    serve the harness to an MCP client over stdio
+down                   stop it
 ```
 
-`--build` runs the config's `map.build` first. `up` records the session in `.slop/session.json`
-next to the config. The other commands find the running game through that file, and `down`
-removes it.
+- **Which map:** `[map]` is a folder under `maps/`. Left out, it's the default map from
+  `configuration.toml`; `-c` takes any `slop.toml` instead (see [config.md](config.md)).
+- **`--build`** runs the map's `map.build` first.
+- **The running game:** `up` records it in `.slop/session.json` at the repo root, with the map
+  it plays. The commands below `mcp` work on that game, whatever map it is, and `down` ends it.
 
 ```sh
 ./slop up
@@ -65,7 +70,7 @@ def test_gold_reaches_everyone(game):
 ```
 
 A test that uses the library is **skipped**, not failed, when the map has none (a JASS map, or
-`library.inject = false`). Run one test with `./slop test gold_reaches_everyone`.
+`library.inject = false`). Run one test with `./slop test <map> --only gold_reaches_everyone`.
 
 **Games are fresh, clients are reused.** Launching two clients takes about a minute, so the
 clients stay up between tests:
@@ -111,15 +116,15 @@ client costs time, not a test. `--fresh` launches the clients again for every te
 
 ## MCP
 
-`./slop -c <config> mcp` serves the harness over stdio, for an AI agent to play the map. For
-Claude Code, in the map's repo `.mcp.json`:
+`./slop mcp [map]` serves the harness over stdio, for an AI agent to play the map. For Claude
+Code, in the map's repo `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "wc3-slop": {
       "command": "../wc3-slop-lan/slop",
-      "args": ["-c", "path/to/slop.toml", "mcp"]
+      "args": ["mcp", "<map>"]
     }
   }
 }

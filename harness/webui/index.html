@@ -9,7 +9,8 @@
              the game over a websocket. This wrapper keeps hold of that socket, because a second
              connection of our own is accepted but never receives a reply. -->
         <script>
-            window.slop = {socket: null, sent: [], trace: false, quiet: true, room: 400};
+            // The harness writes its server's address here when it installs the page
+            window.slop = {server: 'http://127.0.0.1:8777', socket: null, sent: [], trace: false, quiet: true, room: 400};
             (function () {
                 var Native = window.WebSocket;
                 function Wrapped(url, protocols) {
@@ -27,7 +28,7 @@
                             if (window.slop.sent.length > 80) { window.slop.sent.shift(); }
                             if (!window.slop.trace) { return; }
                             try {
-                                fetch('http://127.0.0.1:8777/', {method: 'POST', mode: 'no-cors',
+                                fetch(window.slop.server + '/', {method: 'POST', mode: 'no-cors',
                                                                  body: '[' + location.port + '] ' + line});
                             } catch (error) { /* no logger running */ }
                         };
@@ -80,7 +81,7 @@
             //   reload                                    re-read this file, so it can be edited live
             //   trace {quiet, room}                        how much of the traffic is recorded
             (function () {
-                var SERVER = 'http://127.0.0.1:8777';
+                var SERVER = window.slop.server;
                 var me = location.port || '0';
                 var status = null;
                 var lines = [];

@@ -22,10 +22,13 @@ import time
 import uuid
 
 from . import trace, webui
+from . import config as config_module
 from .config import REPO, Config
 
 ACTIVATE = REPO / 'harness/activate.sh'
-MAPS = 'Library/Application Support/Blizzard/Warcraft III/Maps'
+# The running game, whichever map it is: one at a time, since a session refuses to start while
+# Warcraft III runs
+STATE = REPO / '.slop' / 'session.json'
 
 
 class TestFailed(AssertionError):
@@ -57,7 +60,7 @@ class Session:
         self.log = log
         self.game_name = 'slop-' + uuid.uuid4().hex[:8]
         # Every client plays in the one data folder; the library names its files by player
-        self.data = trace.data_folder(pathlib.Path.home())
+        self.data = config.custom_map_data
         # The slot each client plays, in slot order: client 0 plays the first of them
         self.client_slots = []
         self.artifacts = config.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-{name}"
@@ -74,7 +77,7 @@ class Session:
 
     @property
     def staged_map(self):
-        return pathlib.Path.home() / MAPS / self.config.map_folder / self.config.map_file.name
+        return self.config.maps / self.config.map_folder / self.config.map_file.name
 
     def start(self, timeout=240):
         """Launches the clients and plays the first game on them."""
@@ -90,12 +93,11 @@ class Session:
         self._stage()
 
         self.started_server = self.server.ensure(self.artifacts / 'webui.log')
-        webui.install_page(config.webui_dir)
+        webui.install_page(config.webui_dir, config.server)
         self.server.reset()
         for index in range(config.clients):
-            # -editor skips the Battle.net login; -nowfpause keeps an unfocused game running
-            subprocess.Popen([str(config.game), '-editor', '-launch', '-windowmode', 'windowed', '-nowfpause'],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            subprocess.Popen(config.launch, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
             self._wait(lambda: self.server.checked_in() >= index + 1, 90, f'client {index + 1} to start')
             # Offline: LAN needs no Battle.net, and a sign-in can sit in the login queue for minutes
             self.server.command(index + 1, 'raw', message='PlayOffline', payload={})
@@ -157,7 +159,8 @@ class Session:
         self._start_host()
         for number in range(1, config.clients + 1):
             subprocess.run(['bash', str(ACTIVATE), str(number), str(self.client_pids[number - 1])],
-                           check=True, capture_output=True, timeout=90, env=dict(os.environ, WC3_SERVER=config.server))
+                           check=True, capture_output=True, timeout=90,
+                           env=dict(os.environ, WC3_SERVER=config.server, WC3_GAME=str(config.game)))
             self.server.command(number, 'raw', message='SendGameListing', payload={})
             self.server.command(number, 'lanjoin', gameName=self.game_name, keepProvider=True)
         self._wait(lambda: self.control('status').startswith('Playing'), timeout, 'the game to start')
@@ -232,7 +235,7 @@ class Session:
             self.server.stop()
             subprocess.run(['pkill', '-f', str(webui.SERVER)], capture_output=True)
         if self.saved:
-            (self.config.runs / 'session.json').unlink(missing_ok=True)
+            STATE.unlink(missing_ok=True)
         self.log(f'stopped; artifacts in {self.artifacts}')
 
     def save(self):
@@ -240,15 +243,17 @@ class Session:
         state = dict(name=self.name, game_name=self.game_name, artifacts=str(self.artifacts), host_pid=self.host_pid,
                      client_pids=self.client_pids, started_server=self.started_server, library=self.library,
                      seat=self.seat, client_slots=self.client_slots)
-        (self.config.runs / 'session.json').write_text(json.dumps(state, indent=1))
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        STATE.write_text(json.dumps(dict(state, config=str(self.config.path)), indent=1))
         self.saved = True
 
     @classmethod
-    def resume(cls, config: Config, log=print):
-        path = config.runs / 'session.json'
-        if not path.exists():
-            raise RuntimeError('no session is up (slop up starts one)')
-        state = json.loads(path.read_text())
+    def resume(cls, log=print):
+        """The session `slop up` left running, whichever map it plays."""
+        if not STATE.exists():
+            raise RuntimeError('no game is up (slop up starts one)')
+        state = json.loads(STATE.read_text())
+        config = config_module.load(state['config'])
         session = cls(config, state['name'], log)
         session.game_name, session.artifacts = state['game_name'], pathlib.Path(state['artifacts'])
         session.host_pid, session.client_pids = state['host_pid'], state['client_pids']

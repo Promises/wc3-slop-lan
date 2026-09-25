@@ -1,8 +1,9 @@
 # Warcraft Maul Reimagined (github.com/Promises/Warcraft-Maul-Reimagined), the map this was built
 # for, and the full example: an active host, the library, and the map's own hooks on top of it
-# (src/World/Game/SlopHooks.ts there). With both repos side by side:
+# (src/World/Game/SlopHooks.ts there). The map is not in this folder: map.file loads the map
+# repo's build. With both repos side by side:
 #
-#   ./slop -c examples/warcraft-maul/slop.toml test --build
+#   ./slop test warcraft-maul --build
 #
 # Elsewhere, point WC3_MAUL at the map repo.
 

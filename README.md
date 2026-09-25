@@ -12,8 +12,8 @@ keyboard or window focus is needed, so the machine stays usable while tests run.
   starts; no build of the map has to contain it. It runs commands as any player (unit orders,
   resources, and whatever the map adds through hooks) and writes a lockstep trace that tests
   read the game back from.
-- **A harness** (`harness/`, Python, no dependencies). Configured by one `slop.toml`, it builds,
-  stages, launches, joins, drives and checks. You can use it from the command line (`./slop`),
+- **A harness** (`harness/`, Python, no dependencies). Configured by a `slop.toml` per map, it
+  builds, stages, launches, joins, drives and checks. You can use it from the command line (`./slop`),
   from Python tests, or as an MCP server for an AI agent.
 
 It works on any map, at three levels:
@@ -22,35 +22,70 @@ It works on any map, at three levels:
 |---|---|
 | any map, host hidden | two clients play it on the host; every tick is checked for desyncs |
 | a Lua map | plus the trace, and commands through the library: `.units`, `.order`, `.build`, `.gold`, `.lumber` |
-| a Lua map with hooks | plus the map's own commands and state: see [Warcraft Maul](examples/warcraft-maul) |
+| a Lua map with hooks | plus the map's own commands and state: see [Warcraft Maul](maps/warcraft-maul) |
+
+## Requirements
+
+- **macOS** with **Warcraft III 3.0.0.24268** in `/Applications/Warcraft III`, installed
+  through Battle.net. Tested on Apple Silicon, where the game runs under Rosetta. Other game
+  builds are refused; see *Limits*.
+- **Xcode command line tools** (`xcode-select --install`): `lldb`, which switches the clients to
+  LAN, and the compilers for the host.
+- **CMake** (`brew install cmake`), to build StormLib inside the host.
+- **Rust** ([rustup.rs](https://rustup.rs)), to build the host.
+- **Python 3.11+.** The harness uses only the standard library.
+
+Battle.net doesn't have to run, and no login is needed: the clients start offline.
+
+## Install
+
+```sh
+git clone git@github.com:Promises/wc3-slop-lan.git
+cd wc3-slop-lan
+(cd host && cargo build)     # optional: the first `./slop up` or `./slop test` builds it too
+```
+
+## Setup
+
+```sh
+./slop check                 # what is missing, if anything; changes nothing
+```
+
+- **The game somewhere else?** Copy `configuration.example.toml` to `configuration.toml` and fix
+  the paths under `[game]`. A standard install needs no `configuration.toml`.
+- **Debugger permission:** if the first run reports that `lldb` can't attach to the game, run
+  `sudo DevToolsSecurity -enable` once.
+- **Close Warcraft III and W3Champions first.** The harness won't start while the game is
+  running, and W3Champions replaces the game's menu page with its own.
+- **The menu page:** the first run puts the harness's page into the game's `webui` folder. The
+  page that was there is kept as `index.html.before-slop`.
 
 ## Quick start
 
 ```sh
-./slop -c examples/any-map/slop.toml check          # what is missing, if anything
-SLOP_MAP=~/maps/MyMap.w3x ./slop -c examples/any-map/slop.toml test
-```
-
-Or write your own `slop.toml` (see [docs/config.md](docs/config.md)) and run:
-
-```sh
-./slop up                    # start a game and leave it running
-./slop cmd 0 .gold 5000      # red gets 5000 gold, on every client
+./slop up                    # the default map, (2)Hammerfall_S3, on two clients; left running
+./slop status                # the host's view: Playing, both players in
+./slop file 0 .gold 5000     # red gets 5000 gold, on every client
 ./slop state                 # the newest heartbeat: gold, lumber, the map's own keys
-./slop down
+./slop down                  # stop it
+
+./slop test                  # or: the map's tests, each on a fresh game
 ```
 
-**Needs:**
-- macOS, with Warcraft III 3.0.0.24268 (see *Limits*);
-- Python 3.11+;
-- Rust, to build the host (the first run builds it).
+- **Maps** live in `maps/<name>/`: a `slop.toml`, `tests.py`, and the map file. `./slop maps`
+  lists them; `./slop up warcraft-maul` picks one. To test your own map, add a folder like
+  `maps/any-map` with your map in it.
+- **This machine's settings** (the default map, how to run the game) go in
+  `configuration.toml`.
+
+See [docs/getting-started.md](docs/getting-started.md) and [docs/config.md](docs/config.md).
 
 ## Docs
 
 | | |
 |---|---|
 | [getting-started.md](docs/getting-started.md) | set up, check, first run |
-| [config.md](docs/config.md) | every `slop.toml` key |
+| [config.md](docs/config.md) | maps, every `slop.toml` and `configuration.toml` key |
 | [harness.md](docs/harness.md) | the `slop` command, writing tests, the Python API, the MCP server |
 | [library.md](docs/library.md) | what the map library does, its commands, hooks for your map, the trace |
 | [host.md](docs/host.md) | the host binary: active or hidden, control commands, `inject`, `map` |
@@ -62,12 +97,13 @@ Or write your own `slop.toml` (see [docs/config.md](docs/config.md)) and run:
 
 ```
 slop                 the harness's command line
+configuration.example.toml  this machine's settings: copy to configuration.toml to change them
 host/                the host (Rust): hosting, injecting the library, reading maps
 library/             slop.lua, its TypeScript declarations, and an offline test (lua library/test.lua)
 harness/             the Python harness (slop/), the web UI page and its server (webui/),
                      activate.sh (switches a client to LAN), wc3.sh (drive the menus by hand)
-examples/any-map/    the least any map needs
-examples/warcraft-maul/  a full example: active host, library, and the map's own hooks
+maps/any-map/        the default map: (2)Hammerfall_S3 with a hidden host, the least any map needs
+maps/warcraft-maul/  a full example: active host, library, the map's own hooks, its build elsewhere
 diagnostics/         capture and decode tools used to work out the protocol
 docs/
 ```

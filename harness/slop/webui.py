@@ -68,8 +68,12 @@ class Server:
         return next((int(k) for k, v in self.instances().items() if v['number'] == number), None)
 
 
-def install_page(webui_dir):
-    """Puts our page in the game's webui folder, keeping the page that was there."""
+DEFAULT_SERVER = "server: 'http://127.0.0.1:8777'"
+
+
+def install_page(webui_dir, server):
+    """Puts our page in the game's webui folder, keeping the page that was there, with the
+    address of the server it reports to written in."""
     webui_dir = pathlib.Path(webui_dir)
     if not webui_dir.is_dir():
         raise RuntimeError(f'no webui folder at {webui_dir}: is the game installed there? (game.webui in slop.toml)')
@@ -78,7 +82,10 @@ def install_page(webui_dir):
     kept = (webui_dir / BACKUP).exists() or (webui_dir / 'index.html.before-wcmaul').exists()
     if target.exists() and not ours and not kept:
         target.rename(webui_dir / BACKUP)
-    target.write_bytes(PAGE.read_bytes())
+    page = PAGE.read_text()
+    if DEFAULT_SERVER not in page:
+        raise RuntimeError(f'{PAGE} no longer has the server address where the harness writes it')
+    target.write_text(page.replace(DEFAULT_SERVER, f"server: '{server}'"))
 
 
 def restore_page(webui_dir):

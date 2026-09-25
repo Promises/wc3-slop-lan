@@ -1,0 +1,42 @@
+# This machine's settings: which map `slop up` / `slop test` use when none is named, and how to
+# run Warcraft III here. Copy this to configuration.toml and edit that; git ignores it. Without
+# one, the harness uses the values below, which fit a standard macOS install. Paths may start
+# with ~ and may use ${VAR} or ${VAR:-default}; relative paths are from this folder. See
+# docs/config.md.
+
+# The default map: a folder under maps/
+map = "any-map"
+
+[game]
+# The game's executable
+binary = "/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III"
+
+# The folder the game serves its menus from; the harness puts its page here
+webui = "/Applications/Warcraft III/_retail_/webui"
+
+# The game's user folder, which holds Maps and CustomMapData. Both clients share it.
+data = "~/Library/Application Support/Blizzard/Warcraft III"
+
+# How each client is started. -editor skips the Battle.net login; -nowfpause keeps a game
+# running while its window is not focused.
+args = ["-editor", "-launch", "-windowmode", "windowed", "-nowfpause"]
+
+# Put in front of the binary when starting it, e.g. to run it through Wine
+launcher = []
+
+# The web UI server the page reports to. The harness writes it into the page it installs.
+server = "http://127.0.0.1:8777"
+
+
+# Windows (untested; see docs/porting.md):
+#
+# binary = "C:/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe"
+# webui = "C:/Program Files (x86)/Warcraft III/_retail_/webui"
+# data = "~/Documents/Warcraft III"
+
+# Linux + Wine (untested; see docs/porting.md):
+#
+# binary = "~/wc3/drive_c/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe"
+# webui = "~/wc3/drive_c/Program Files (x86)/Warcraft III/_retail_/webui"
+# data = "~/wc3/drive_c/users/${USER}/Documents/Warcraft III"
+# launcher = ["env", "WINEPREFIX=/home/me/wc3", "wine"]

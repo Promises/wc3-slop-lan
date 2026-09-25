@@ -108,7 +108,7 @@ if (Slop !== undefined) {
 The functions are plain table fields, so they are declared `this: void`: TSTL calls them with a
 dot, without passing `self`.
 
-[`examples/warcraft-maul`](../examples/warcraft-maul) is a full set. The hooks that example
+[`maps/warcraft-maul`](../maps/warcraft-maul) is a full set. The hooks that example
 relies on live in Warcraft Maul's `src/World/Game/SlopHooks.ts`. They:
 
 - run chat commands as any player (`-gold 500`);

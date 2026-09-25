@@ -13,11 +13,6 @@ COMMAND_FILE = 'slop-cmd'
 LINE = re.compile(r'(\d+) t(\d+) h(\d+) (\S+) ?(.*)')
 
 
-def data_folder(home):
-    """Where a client with that home folder keeps CustomMapData."""
-    return pathlib.Path(home) / 'Library/Application Support/Blizzard/Warcraft III/CustomMapData'
-
-
 def clear(folder):
     """Removes what earlier games left: trace chunks, command files, beat files."""
     folder = pathlib.Path(folder)
