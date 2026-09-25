@@ -1,0 +1,22 @@
+# The least any map needs: two clients play it on the host, and the host checks every tick that
+# they agree. Point SLOP_MAP at a map (or edit map.file), then:
+#
+#   SLOP_MAP=~/maps/MyMap.w3x ./slop -c examples/any-map/slop.toml test
+#
+# Lua maps also get the library (the trace, .units/.order/...); JASS maps run without it.
+
+[map]
+file = "${SLOP_MAP}"
+folder = "slop"
+
+[host]
+# hidden: the host takes no slot, so the map plays exactly as it would on Battle.net.
+# active: the host plays a seat of its own and can act; see ../warcraft-maul.
+mode = "hidden"
+
+[clients]
+count = 2
+names = ["red", "blue"]
+
+[tests]
+file = "tests.py"

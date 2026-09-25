@@ -1,0 +1,4 @@
+target/
+captures/
+.slop/
+__pycache__/

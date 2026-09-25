@@ -1,0 +1,23 @@
+# A Warcraft III LAN game host for testing maps with clients on this machine, built on
+# W3Champions' open Flo crates. See ../README.md.
+[package]
+name = "wc3-slop-lan"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+flo-w3gs = { git = "https://github.com/BogdanW3/W3C-Flo", rev = "6db3a4010fab0b0b29824a61f2c9c956f97fd211" }
+flo-w3map = { git = "https://github.com/BogdanW3/W3C-Flo", rev = "6db3a4010fab0b0b29824a61f2c9c956f97fd211" }
+flo-util = { git = "https://github.com/BogdanW3/W3C-Flo", rev = "6db3a4010fab0b0b29824a61f2c9c956f97fd211" }
+stormlib = "0.1"
+stormlib-sys = "0.1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+bytes = "1"
+
+# Flo's own workspace patch, which its crates need to resolve
+[patch.crates-io]
+stormlib = { git = "https://github.com/wc3tools/stormlib-rs.git" }
+stormlib-sys = { git = "https://github.com/wc3tools/stormlib-rs.git" }

@@ -1,0 +1,25 @@
+# Warcraft Maul Reimagined (github.com/Promises/Warcraft-Maul-Reimagined), the map this was built
+# for, and the full example: an active host, the library, and the map's own hooks on top of it
+# (src/World/Game/SlopHooks.ts there). With both repos side by side:
+#
+#   ./slop -c examples/warcraft-maul/slop.toml test --build
+#
+# Elsewhere, point WC3_MAUL at the map repo.
+
+[map]
+file = "${WC3_MAUL:-../../../wc3-ts-template}/dist/bin/map.w3x"
+folder = "WarcraftMaulDev"
+build = "npm run build:dev"
+build_dir = "${WC3_MAUL:-../../../wc3-ts-template}"
+
+[host]
+mode = "active"
+# Peach: the map keeps the seat out of the game (it skips Slop.seat when it seats defenders)
+seat = 17
+
+[clients]
+count = 2
+names = ["red", "blue"]
+
+[tests]
+file = "tests.py"

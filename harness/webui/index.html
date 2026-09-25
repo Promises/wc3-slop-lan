@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>Warcraft 3 UI</title>
+        <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1.0, minimal-ui" />
+        <!-- The game's menus are this page: it serves itself at /webui/index.html out of
+             <install>/_retail_/webui/ and the glue bundle below draws the whole UI, talking to
+             the game over a websocket. This wrapper keeps hold of that socket, because a second
+             connection of our own is accepted but never receives a reply. -->
+        <script>
+            window.slop = {socket: null, sent: [], trace: false, quiet: true, room: 400};
+            (function () {
+                var Native = window.WebSocket;
+                function Wrapped(url, protocols) {
+                    var socket = protocols === undefined ? new Native(url) : new Native(url, protocols);
+                    if (String(url).indexOf('/webui-socket/') !== -1 && !window.slop.socket) {
+                        window.slop.socket = socket;
+                        // Recording lives here rather than in the driver, so a game driven by
+                        // hand is captured just as well as one driven by this page. Lines go to
+                        // harness/webui/server.py once autostart.json asks for a trace.
+                        // Housekeeping chatter, hidden unless window.slop.quiet is turned off
+                        var noise = /Localization|RankedSeason|Telemetry|Leaderboard|Friend|Clan|MMStats|Profile|Chat|Toon|Collection|GetOptions|Hotkey|Presence|OptionsData|ScreenTransitionInfo|ChannelUpdate|GameList|TeamsInformation|Sound|Music|GameFocus/i;
+                        var hidden = function (name) { return window.slop.quiet && noise.test(name || ''); };
+                        var record = function (line) {
+                            window.slop.sent.push(line);
+                            if (window.slop.sent.length > 80) { window.slop.sent.shift(); }
+                            if (!window.slop.trace) { return; }
+                            try {
+                                fetch('http://127.0.0.1:8777/', {method: 'POST', mode: 'no-cors',
+                                                                 body: '[' + location.port + '] ' + line});
+                            } catch (error) { /* no logger running */ }
+                        };
+                        var nativeSend = socket.send.bind(socket);
+                        socket.send = function (data) {
+                            try {
+                                var parsed = JSON.parse(data);
+                                if (!hidden(parsed.message)) {
+                                    record('-> ' + parsed.message + ' '
+                                        + JSON.stringify(parsed.payload || {}).slice(0, window.slop.room));
+                                }
+                            } catch (error) { /* not ours to read */ }
+                            return nativeSend(data);
+                        };
+                        socket.addEventListener('message', function (event) {
+                            try {
+                                var parsed = JSON.parse(event.data);
+                                if (!hidden(parsed.messageType)) {
+                                    record('<- ' + parsed.messageType + ' '
+                                        + JSON.stringify(parsed.payload || {}).slice(0, window.slop.room));
+                                }
+                            } catch (error) { /* frames we cannot read are not ours */ }
+                        });
+                    }
+                    return socket;
+                }
+                Wrapped.prototype = Native.prototype;
+                Wrapped.CONNECTING = 0; Wrapped.OPEN = 1; Wrapped.CLOSING = 2; Wrapped.CLOSED = 3;
+                window.WebSocket = Wrapped;
+            })();
+        </script>
+    </head>
+    <body>
+        <div id="root"></div>
+        <div id="portal"></div>
+        <script src="GlueManager.js"></script>
+        <script>
+            // The page takes its orders from harness/webui/server.py: it checks in, reports
+            // where the game is, and runs what the server asks for, so instances can be started
+            // whenever and told what to do afterwards. Without a server it does nothing and the
+            // menus behave exactly as they would on the stock page.
+            //
+            //   host  {map, directory, gameName, password}  create a lobby on that map
+            //   join  {gameName, password}                  find that lobby by name and join it
+            //   lanjoin {gameName}                          join a LAN game (the wc3-slop-lan host)
+            //   start                                       start the game from the lobby
+            //   leave                                       leave the lobby
+            //   raw   {message, payload}                    anything the menus themselves send
+            //   eval  {code}                              run it here and send the value back
+            //   reload                                    re-read this file, so it can be edited live
+            //   trace {quiet, room}                        how much of the traffic is recorded
+            (function () {
+                var SERVER = 'http://127.0.0.1:8777';
+                var me = location.port || '0';
+                var status = null;
+                var lines = [];
+                var lobby = {};
+                var screen = 'UNKNOWN';
+
+                function note(text) {
+                    if (!status) {
+                        status = document.createElement('div');
+                        // Top left and click-through, so it never covers a menu button
+                        status.style.cssText = 'position:fixed;left:8px;top:8px;z-index:99999;white-space:pre-wrap;'
+                            + 'pointer-events:none;max-width:60vw;font:11px/1.4 monospace;color:#ffcc00;'
+                            + 'background:rgba(0,0,0,.72);padding:4px 8px';
+                        document.body.appendChild(status);
+                    }
+                    lines.push(text);
+                    if (lines.length > 6) { lines.shift(); }
+                    status.textContent = 'slop:\n' + lines.join('\n');
+                }
+
+                function post(path, body) {
+                    try {
+                        return fetch(SERVER + path, {method: 'POST', mode: 'no-cors',
+                                                     body: typeof body === 'string' ? body
+                                                                                    : JSON.stringify(body || {})});
+                    } catch (error) { return null; }
+                }
+
+                function send(message, payload) {
+                    var socket = window.slop.socket;
+                    if (!socket || socket.readyState !== 1) { return false; }
+                    socket.send(JSON.stringify({type: 'webui', message: message, payload: payload || {}}));
+                    return true;
+                }
+
+                // Both provider messages with empty payloads, as the menus send them: with a
+                // provider id instead the client stays online, where a local map is refused.
+                // Local is single player: a lobby made there is invisible to everyone else, so
+                // it is only for driving one instance into a map on its own.
+                function setProvider(local) {
+                    send('InitializeNetProvider', {});
+                    if (local) { send('InitializeLocalNetProvider', {}); }
+                }
+
+                var host = {wanted: null, tried: [], folder: null, made: false, announced: false};
+
+                function hostLobby(command) {
+                    host.wanted = command;
+                    host.tried = [];
+                    host.folder = null;
+                    host.made = false;
+                    host.announced = false;
+                    setProvider(!!command.local);
+                    note('listing maps for ' + command.map);
+                    // The listing is not optional: a CreateLobby naming a map the engine has not
+                    // just listed comes back "unavailable or corrupted", however right the path is
+                    setTimeout(function () {
+                        send('GetMapList', command.directory ? {subdirectory: command.directory}
+                                                             : {useLastMap: true});
+                    }, 600);
+                }
+
+                function createLobby(filename) {
+                    var command = host.wanted || {};
+                    // A lobby with no password is advertised publicly. Blizzard's own maps may
+                    // be hosted that way; ours is a build nobody outside should get hold of.
+                    var stock = filename.indexOf('Maps/') === 0;
+                    if (!command.password && !stock) {
+                        note('refusing to host ' + filename + ' publicly: it needs a password');
+                        return;
+                    }
+                    host.made = true;
+                    note('creating ' + (command.gameName || 'a lobby'));
+                    send('CreateLobby', {
+                        filename: filename,
+                        gameName: command.gameName || 'Single Player',
+                        gameSpeed: command.gameSpeed === undefined ? 2 : command.gameSpeed,
+                        // A lobby on Battle.net is listed publicly while it exists
+                        privateGame: !!command.password,
+                        password: command.password || '',
+                        mapSettings: {
+                            flagLockTeams: true,
+                            flagPlaceTeamsTogether: true,
+                            flagFullSharedUnitControl: false,
+                            flagRandomRaces: false,
+                            flagRandomHero: false,
+                            settingObservers: 0,
+                            settingVisibility: 0
+                        }
+                    });
+                }
+
+                var join = {wanted: null, timer: null, done: false};
+
+                function joinLobby(command) {
+                    join.wanted = command;
+                    join.done = false;
+                    setProvider(false);
+                    note('looking for ' + command.gameName);
+                    if (join.timer) { clearInterval(join.timer); }
+                    join.timer = setInterval(function () {
+                        if (join.done) { return; }
+                        send('GetGameList', {});
+                        // The engine answers a name lookup by asking for a password, exactly as
+                        // it would prompt a player; the answer below carries it
+                        send('JoinGameByGameName', {gameName: command.gameName,
+                                                    gamePass: command.password || '',
+                                                    checkForGamePass: true});
+                    }, 3000);
+                }
+
+                // A LAN game is listed under the loopback provider once its Bonjour record resolves
+                // (the sequence W3Champions' client uses, captured 2026-09-24). JoinGame takes the
+                // engine's own list id, not anything the host advertised, so match by name.
+                var lan = {wanted: null, timer: null};
+
+                function lanJoin(command) {
+                    lan.wanted = command;
+                    // After harness/activate.sh the provider is already TCPN while still reporting
+                    // LOOP; initialising again would rebuild it as plain LOOP and lose that
+                    if (!command.keepProvider) { setProvider(true); }
+                    send('SendGameListing', {});
+                    note('looking for LAN game ' + command.gameName);
+                    if (lan.timer) { clearInterval(lan.timer); }
+                    lan.timer = setInterval(function () { send('GetGameList', {}); }, 2000);
+                }
+
+                function lanListed(games) {
+                    if (!lan.wanted) { return; }
+                    for (var i = 0; i < games.length; i++) {
+                        if (games[i].name === lan.wanted.gameName) {
+                            clearInterval(lan.timer);
+                            lan.timer = null;
+                            note('joining LAN game ' + games[i].name + ' (list id ' + games[i].id + ')');
+                            send('JoinGame', {gameId: games[i].id, password: '', mapFile: games[i].mapFile});
+                            lan.wanted = null;
+                            return;
+                        }
+                    }
+                }
+
+                function arrived() {
+                    if (join.done) { return; }
+                    join.done = true;
+                    if (join.timer) { clearInterval(join.timer); join.timer = null; }
+                    note('in the lobby');
+                }
+
+                // Anything this page can reach, run on demand and answered on the log: the
+                // glue bundle's own state, a screen change, a socket message, a reload of this
+                // very file after it is edited. That is what makes the driver a harness rather
+                // than a fixed script.
+                function runCode(command) {
+                    var value;
+                    try {
+                        value = eval(command.code);
+                    } catch (error) {
+                        value = 'error: ' + error;
+                    }
+                    var text;
+                    try {
+                        text = typeof value === 'string' ? value : JSON.stringify(value);
+                    } catch (error) {
+                        text = String(value);
+                    }
+                    post('/', '[' + me + '] = ' + String(text).slice(0, 8000));
+                }
+
+                function run(command) {
+                    if (command.verb === 'host') { hostLobby(command); }
+                    else if (command.verb === 'join') { joinLobby(command); }
+                    else if (command.verb === 'start') { note('starting'); send('LobbyStart'); }
+                    else if (command.verb === 'leave') { note('leaving'); send('LeaveGame'); }
+                    else if (command.verb === 'raw') { send(command.message, command.payload); }
+                    else if (command.verb === 'lanjoin') { lanJoin(command); }
+                    else if (command.verb === 'eval') { runCode(command); }
+                    else if (command.verb === 'reload') { note('reloading'); location.reload(); }
+                    else if (command.verb === 'trace') {
+                        if (command.quiet !== undefined) { window.slop.quiet = !!command.quiet; }
+                        if (command.room) { window.slop.room = command.room; }
+                        note('trace room ' + window.slop.room + (window.slop.quiet ? ' quiet' : ' everything'));
+                    }
+                    else { note('unknown order: ' + command.verb); }
+                }
+
+                function listen() {
+                    window.slop.socket.addEventListener('message', function (event) {
+                        var data;
+                        try { data = JSON.parse(event.data); } catch (error) { return; }
+                        var message = data.messageType;
+                        var payload = data.payload || {};
+
+                        if (message === 'MapList' && host.wanted && !host.made) {
+                            var maps = (payload.mapList && payload.mapList.maps) || [];
+                            var match = null;
+                            for (var i = 0; i < maps.length; i++) {
+                                var name = (maps[i].filename || '') + '';
+                                if (!maps[i].isFolder && name.toLowerCase() === host.wanted.map.toLowerCase()) {
+                                    match = maps[i];
+                                    break;
+                                }
+                                if (maps[i].isFolder && host.wanted.folder
+                                        && name.toLowerCase() === host.wanted.folder.toLowerCase()) {
+                                    host.folder = maps[i];
+                                }
+                            }
+                            if (!match && host.folder) {
+                                // Folders are listed with an absolute path; the request for one
+                                // wants the same with a trailing separator
+                                var path = host.folder.filepath + host.folder.filename + '/';
+                                if (host.tried.indexOf(path) === -1) {
+                                    host.tried.push(path);
+                                    note('opening ' + host.folder.filename);
+                                    send('GetMapList', {subdirectory: path});
+                                    return;
+                                }
+                            }
+                            if (match) { createLobby((match.filepath || '') + match.filename); }
+                            else { note('no ' + host.wanted.map + ' among ' + maps.length + ' entries'); }
+                        }
+
+                        if (message === 'GameList') { lanListed(payload.games || []); }
+
+                        if (message === 'RequestForPassword' && join.wanted && !join.done) {
+                            send('JoinGameByGameName', {gameName: join.wanted.gameName,
+                                                        gamePass: join.wanted.password || ''});
+                        }
+
+                        if (message === 'GameLobbySetup') {
+                            // Engine side only: the menus may still be somewhere else, so the
+                            // screen reported stays whatever SetGlueScreen last said
+                            lobby = {isHost: !!payload.isHost, playerHost: payload.playerHost || ''};
+                            post('/state?id=' + me, {screen: screen, lobby: lobby});
+                            if (host.made && !host.announced) {
+                                // What the lobby screen sends when it opens. Once only: the
+                                // engine answers it with another GameLobbySetup, so repeating it
+                                // here would be an endless round trip.
+                                host.announced = true;
+                                send('SendGameLobbySetup', {});
+                            }
+                            if (join.wanted) { arrived(); }
+                        }
+
+                        if (message === 'SetGlueScreen') {
+                            screen = payload.screen;
+                            post('/state?id=' + me, {screen: screen, lobby: lobby});
+                            if (payload.screen === 'GAME_LOBBY' && join.wanted) { arrived(); }
+                        }
+                    });
+                }
+
+                function poll() {
+                    fetch(SERVER + '/poll?id=' + me)
+                        .then(function (response) { return response.json(); })
+                        .then(function (work) {
+                            for (var i = 0; i < work.length; i++) { run(work[i]); }
+                            setTimeout(poll, 500);
+                        })
+                        .catch(function () { setTimeout(poll, 3000); });
+                }
+
+                function whenReady(tries) {
+                    var socket = window.slop.socket;
+                    if (socket && socket.readyState === 1) {
+                        listen();
+                        window.slop.trace = true;
+                        fetch(SERVER + '/hello?id=' + me)
+                            .then(function (response) { return response.json(); })
+                            .then(function (hello) { note('instance ' + hello.number + ', waiting for orders'); poll(); })
+                            .catch(function () { /* nothing is managing us; the menus are yours */ });
+                        return;
+                    }
+                    if (tries > 300) { return; }
+                    setTimeout(function () { whenReady(tries + 1); }, 100);
+                }
+
+                whenReady(0);
+            })();
+        </script>
+    </body>
+</html>
