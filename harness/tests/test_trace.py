@@ -21,6 +21,12 @@ class TraceTest(unittest.TestCase):
         self.assertNotIn('g', beat)
         self.assertIsNone(trace.parse_beat('42 t121 h5001 unit p0 end'))
 
+    def test_without_handles(self):
+        a = trace.without_handles('99 t800 h1051577 beat handles=1051576 cmdpoll=159 wave=1')
+        b = trace.without_handles('99 t800 h1051576 beat handles=1051575 cmdpoll=159 wave=1')
+        self.assertEqual(a, b)
+        self.assertEqual(a, '99 t800 beat cmdpoll=159 wave=1')
+
     def test_unit(self):
         unit = trace.parse_unit('7 t3 h9 unit p0 id=2001 type=h000 at=100,-51 life=420 order=')
         self.assertEqual((unit['id'], unit['x'], unit['y'], unit['order']), (2001, 100, -51, ''))

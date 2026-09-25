@@ -73,6 +73,7 @@ class Session:
         return pathlib.Path.home() / MAPS / self.config.map_folder / self.config.map_file.name
 
     def start(self, timeout=240):
+        """Launches the clients and plays the first game on them."""
         config = self.config
         running = subprocess.run(['pgrep', '-f', str(config.game)], capture_output=True, text=True).stdout.split()
         if running:
@@ -83,8 +84,6 @@ class Session:
         self.artifacts.mkdir(parents=True, exist_ok=True)
         ensure_host_binary(config, self.log)
         self._stage()
-        for home in self.homes:
-            trace.clear(trace.data_folder(home))
 
         self.started_server = self.server.ensure(self.artifacts / 'webui.log')
         webui.install_page(config.webui_dir)
@@ -99,7 +98,60 @@ class Session:
             self.server.command(index + 1, 'raw', message='PlayOffline', payload={})
             self.client_pids.append(self._client_pid(index + 1))
         self.log(f'{config.clients} client(s) up, offline')
+        self._play(timeout)
+        return self
 
+    def next_game(self, name, timeout=240):
+        """Ends this game and plays a new one on the same clients, which saves launching them
+        again. Raises when a client does not make it back to the menus; stop() and start() a
+        fresh session then."""
+        self.end_game()
+        self.name = name
+        self.game_name = 'slop-' + uuid.uuid4().hex[:8]
+        self.artifacts = self.config.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-{name}"
+        self.artifacts.mkdir(parents=True, exist_ok=True)
+        self._play(timeout)
+        return self
+
+    def end_game(self, timeout=45):
+        """Ends the game and brings every client back to the menus, keeping its artifacts. With
+        the library the game ends through `.end`, the same moment on every client; without it
+        the host is stopped and the clients are dropped from the game. Either way each client
+        lands on the score screen, which is part of the menus, and is sent on from there."""
+        self._collect()
+        ended = False
+        if self.library:
+            try:
+                if self.seat is not None:
+                    self.cmd(0, '.end')
+                else:
+                    self.file_command(0, '.end')
+                ended = True
+            except (TestFailed, OSError):
+                pass
+        if ended:
+            try:
+                self._wait(lambda: self._screens() == {'SCORE_SCREEN'}, timeout / 2, 'the score screen')
+            except TestFailed:
+                ended = False
+        self._stop_host()
+        if not ended:
+            self._wait(lambda: 'GAME_LOBBY' not in self._screens(), timeout, 'the clients to leave the game')
+        # What the score screen's close button sends. Whether the menus then report another
+        # screen is not known; a client can join the next game from the score screen as well
+        for number in range(1, self.config.clients + 1):
+            self.server.command(number, 'raw', message='ScoreScreenClose', payload={})
+        try:
+            self._wait(lambda: not self._screens() & {'SCORE_SCREEN', 'GAME_LOBBY'}, 10, 'the menus')
+        except TestFailed:
+            pass
+        self.log(f'game over; clients on {", ".join(sorted(map(str, self._screens())))}')
+
+    def _play(self, timeout):
+        """Hosts a game and joins every client to it."""
+        config = self.config
+        for home in self.homes:
+            trace.clear(trace.data_folder(home))
         self._start_host()
         for number in range(1, config.clients + 1):
             subprocess.run(['bash', str(ACTIVATE), str(number), str(self.client_pids[number - 1])],
@@ -113,7 +165,10 @@ class Session:
         self.log(f'game {self.game_name} is on ({"active host, seat " + str(self.seat) if self.seat is not None else "hidden host"}'
                  f'{", library in" if self.library else ", no library"})')
         self.save()
-        return self
+
+    def _screens(self):
+        """The menu screen each client's page last reported."""
+        return {v['state'].get('screen') for v in self.server.instances().values()}
 
     def _stage(self):
         """The map where the game looks, with the library in when the config asks for it."""
@@ -162,17 +217,27 @@ class Session:
         if 'seat=' in status:
             self.seat = int(status.split('seat=')[1].split()[0])
 
-    def stop(self):
+    def _collect(self):
+        """Copies each client's trace into this game's artifacts."""
         for index, home in enumerate(self.homes):
             target = self.artifacts / f'trace-client{index + 1}'
             target.mkdir(parents=True, exist_ok=True)
             for chunk in trace.data_folder(home).glob(trace.TRACE + '-*.txt'):
                 shutil.copy(chunk, target / chunk.name)
-        for pid in [self.host_pid, *self.client_pids]:
-            if pid:
-                subprocess.run(['kill', '-9', str(pid)], capture_output=True)
+
+    def _stop_host(self):
+        if self.host_pid:
+            subprocess.run(['kill', '-9', str(self.host_pid)], capture_output=True)
+            self.host_pid = None
         if self.host_log:
             self.host_log.close()
+            self.host_log = None
+
+    def stop(self):
+        self._collect()
+        self._stop_host()
+        for pid in self.client_pids:
+            subprocess.run(['kill', '-9', str(pid)], capture_output=True)
         if self.started_server:
             self.server.stop()
             subprocess.run(['pkill', '-f', str(webui.SERVER)], capture_output=True)
@@ -276,13 +341,16 @@ class Session:
     # --- the checks every test gets ------------------------------------------------------------------
 
     def check_in_step(self):
-        """Fails when the host saw a desync, or when the clients' traces differ."""
+        """Fails when the host saw a desync, or when the clients' traces differ (handle ids aside)."""
         log = (self.artifacts / 'host.log').read_text(errors='replace')
         if 'DESYNC' in log:
             raise TestFailed(f'the host saw {log.count("DESYNC")} desync(s); see {self.artifacts / "host.log"}')
         if not self.library or self.config.clients < 2:
             return
-        traces = [self.trace(i) for i in range(self.config.clients)]
+        # Handle ids are left out: local-only code (UI frames, effects one player sees) makes and
+        # frees handles on one client and not the other, which is no divergence - the host's
+        # checksum comparison above agrees with that
+        traces = [[trace.without_handles(line) for line in self.trace(i)] for i in range(self.config.clients)]
         for index in range(min(len(t) for t in traces)):
             if len({t[index] for t in traces}) > 1:
                 raise TestFailed(f'the clients parted at trace line {index + 1}: '

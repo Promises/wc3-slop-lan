@@ -75,14 +75,17 @@ def install_page(webui_dir):
         raise RuntimeError(f'no webui folder at {webui_dir}: is the game installed there? (game.webui in slop.toml)')
     target = webui_dir / 'index.html'
     ours = target.exists() and any(mark in target.read_text(errors='replace') for mark in MARKS)
-    if target.exists() and not ours and not (webui_dir / BACKUP).exists():
+    kept = (webui_dir / BACKUP).exists() or (webui_dir / 'index.html.before-wcmaul').exists()
+    if target.exists() and not ours and not kept:
         target.rename(webui_dir / BACKUP)
     target.write_bytes(PAGE.read_bytes())
 
 
 def restore_page(webui_dir):
-    """Puts the page that was there before back, if one was kept."""
+    """Puts the page that was there before back, if one was kept (under either name the harness
+    has used)."""
     webui_dir = pathlib.Path(webui_dir)
-    backup = webui_dir / BACKUP
-    if backup.exists():
-        backup.replace(webui_dir / 'index.html')
+    for name in (BACKUP, 'index.html.before-wcmaul'):
+        if (webui_dir / name).exists():
+            (webui_dir / name).replace(webui_dir / 'index.html')
+            return

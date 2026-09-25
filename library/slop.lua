@@ -53,8 +53,9 @@ do
         return string.char((id >> 24) & 255, (id >> 16) & 255, (id >> 8) & 255, id & 255)
     end
 
-    --- The id a new handle would get: how many handles this client has made. Clients that ran
-    --- the same game are at the same mark; one that made a handle the other did not stays ahead.
+    --- The id a new handle would get: roughly how many handles this client has made. A hint when
+    --- hunting a desync, not proof of one: local-only code (UI frames, effects one player sees)
+    --- makes and frees handles on one client only, so clients in step can differ here.
     function Slop.handleMark()
         local probe = Location(0, 0)
         local mark = GetHandleId(probe)
@@ -225,6 +226,14 @@ do
     builtins['.lumber'] = function(index, words)
         SetPlayerState(Player(index), PLAYER_STATE_RESOURCE_LUMBER, math.tointeger(tonumber(words[2]) or 0) or 0)
         Slop.note('order', 'p' .. index .. ' lumber ' .. tostring(words[2]))
+    end
+
+    -- .end: ends the game for everyone, to the score screen. Every client runs this from the
+    -- same sync event, so every client leaves at the same point and the next game can reuse them
+    builtins['.end'] = function(index)
+        Slop.note('slop', 'p' .. index .. ' ends the game')
+        Slop.flush()
+        EndGame(true)
     end
 
     --- Runs one command line as a player (0-based slot), on the client this is called on. Only

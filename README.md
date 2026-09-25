@@ -58,6 +58,7 @@ Or write your own `slop.toml` (see [docs/config.md](docs/config.md)) and run:
 | [host.md](docs/host.md) | the host binary: active or hidden, control commands, `inject`, `map` |
 | [manual.md](docs/manual.md) | every step by hand, no harness: useful to see each piece work |
 | [protocol.md](docs/protocol.md) | how it works underneath: discovery, map check, activation |
+| [porting.md](docs/porting.md) | how to get it working on a new game version, Windows, or Linux + Wine |
 
 ## Layout
 
@@ -77,7 +78,8 @@ docs/
 
 - **macOS only, and one game build.** A stock client only finds LAN games after a debugger
   switches its network provider (the same trick W3Champions uses). `harness/activate.sh` does
-  that at a fixed address in 3.0.0.24268, and refuses any other build.
+  that at a fixed address in 3.0.0.24268, and refuses any other build. See
+  [porting.md](docs/porting.md) for how to find it again, and how Windows and Wine differ.
 - **The library needs a Lua map.** JASS maps still get hosting and the desync check.
 - **Two clients at most,** one per data folder.
 - **The map must already be on disk.** The host does not send it to clients.

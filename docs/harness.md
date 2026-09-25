@@ -20,7 +20,7 @@ ctl <line>             any host control command (docs/host.md)
 file <client> <line>   a command through a client's file channel, as that client's own player
 state [client]         the newest heartbeat, as JSON
 trace [client] [n]     the last n trace lines
-test [--build] [name]  run the config's tests, each on a fresh game
+test [--build] [--fresh] [name]  run the config's tests, each on a fresh game
 mcp                    serve the harness to an MCP client over stdio
 ```
 
@@ -50,7 +50,8 @@ removes it.
 
 The tests file is plain Python: every `test_*` function is a test. Each one gets a fresh game
 (a `Session`) as its argument and fails by raising. After each test the harness also fails it
-if the host saw a desync, or if the clients' traces differ.
+if the host saw a desync, or if the clients' traces differ (handle ids aside, see
+[library.md](library.md#what-it-does)).
 
 ```python
 from slop import TestFailed
@@ -65,6 +66,15 @@ def test_gold_reaches_everyone(game):
 
 A test that uses the library is **skipped**, not failed, when the map has none (a JASS map, or
 `library.inject = false`). Run one test with `./slop test gold_reaches_everyone`.
+
+**Games are fresh, clients are reused.** Launching two clients takes about a minute, so the
+clients stay up between tests:
+1. The game is ended: `.end` with the library, otherwise the host drops it.
+2. The clients land on the score screen, and are sent on from there.
+3. The next game is hosted and joined on the same clients.
+
+A client that doesn't get back to the menus is replaced by starting everything over, so a stuck
+client costs time, not a test. `--fresh` launches the clients again for every test instead.
 
 ### The session
 

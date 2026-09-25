@@ -11,7 +11,7 @@ one, else $SLOP_CONFIG, else ./slop.toml). See docs/harness.md.
   slop file <client> <line>   a command through a client's file channel, as its own player
   slop state [client]         the newest heartbeat
   slop trace [client] [n]     the last n trace lines
-  slop test [--build] [name]  run the config's tests, each on a fresh game
+  slop test [--build] [--fresh] [name]  run the config's tests, each on a fresh game
   slop mcp                    serve the harness to an MCP client over stdio
 """
 import argparse
@@ -70,6 +70,7 @@ def main(argv=None):
         sub = commands.add_parser(name)
         sub.add_argument('--build', action='store_true', help="run the config's map.build first")
         if name == 'test':
+            sub.add_argument('--fresh', action='store_true', help='launch the clients again for every test')
             sub.add_argument('names', nargs='*')
     commands.add_parser('down')
     commands.add_parser('status')
@@ -90,6 +91,8 @@ def main(argv=None):
     sub.add_argument('lines', type=int, nargs='?', default=30)
     commands.add_parser('mcp')
     args = parser.parse_args(argv)
+    # Progress must show up as it happens, also when the output goes to a file or a pipe
+    sys.stdout.reconfigure(line_buffering=True)
 
     try:
         config = config_module.load(args.config)
@@ -112,7 +115,7 @@ def main(argv=None):
             return 0
         if args.command == 'test':
             ensure_host_binary(config)
-            return 0 if runner.run(config, args.names) else 1
+            return 0 if runner.run(config, args.names, reuse=not args.fresh) else 1
         if args.command == 'mcp':
             mcp.serve(config)
             return 0

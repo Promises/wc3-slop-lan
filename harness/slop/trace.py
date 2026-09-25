@@ -33,6 +33,12 @@ def read(folder):
     return lines
 
 
+def without_handles(line):
+    """A line with its handle ids taken out, for comparing clients: handles made by local-only
+    code differ between clients that are perfectly in step."""
+    return re.sub(r'handles=\d+ ?', '', re.sub(r'^(\d+ t\d+) h\d+', r'\1', line))
+
+
 def of_kind(lines, kind):
     return [line for line in lines if (match := LINE.match(line)) and match.group(4) == kind]
 

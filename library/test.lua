@@ -59,6 +59,8 @@ local orders = {}
 function IssuePointOrder(u, name, x, y) orders[#orders + 1] = {u.id, name, x, y}; return true end
 function IssueImmediateOrder(u, name) orders[#orders + 1] = {u.id, name}; return true end
 function IssueTargetOrder(u, name, t) orders[#orders + 1] = {u.id, name, t.id}; return true end
+local ended
+function EndGame(scoreScreen) ended = scoreScreen end
 function IssueBuildOrderById(u, id, x, y) orders[#orders + 1] = {u.id, 'build', id, x, y}; return true end
 
 units[1] = {id = 2001, owner = 0, type = 0x68303030, x = 100.7, y = -50.2, life = 420.0}   -- h000
@@ -152,6 +154,9 @@ syncTrigger.action()
 check('and runs as that player', Player(1).lumber == 99)
 run(2)
 check('the same command runs once', #sent == 1)
+
+fromHost('1 .end')
+check('.end ends the game with a score screen, after writing the trace', ended == true and find('slop p1 ends the game') ~= nil)
 
 local lines = traced()
 for n = 2, #lines do

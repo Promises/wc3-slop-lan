@@ -30,8 +30,10 @@ A trace line is:
 ```
 
 - `ticks` counts tenths of a second of game time.
-- `handles` is how many handles the client has made. Clients that ran the same game are at the
-  same number, so where it parts is where the games parted.
+- `handles` is roughly how many handles the client has made. It's a hint when hunting a desync,
+  not proof of one. Local-only code (UI frames, effects only one player sees) makes and frees
+  handles on one client only, so clients that are perfectly in step can differ here. The
+  harness leaves it out when it compares clients; the host's per-tick checksum is what decides.
 
 Every second the library writes a heartbeat. Here is one, with Warcraft Maul's hooks adding
 `lives`, `wave`, `k` (kills) and `t` (towers):
@@ -55,6 +57,7 @@ They start with a dot, so they can't clash with a map's own chat commands.
 | `.order <unit> <order> <target>` | a target order at another unit, by handle id |
 | `.build <builder> <type> <x> <y>` | a build order; the type as its four letters |
 | `.gold <n>`, `.lumber <n>` | set the player's resources |
+| `.end` | ends the game for everyone, to the score screen: every client runs it from the same sync event. The harness uses it to reuse the clients for the next test |
 
 - **Results** go to the trace, in the category `order`, as `... issued` or `... rejected`.
 - **Own units only:** a player can only order their own units, as with a real selection.
