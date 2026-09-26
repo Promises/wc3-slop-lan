@@ -11,6 +11,7 @@ SLOP=~/path/to/wc3-slop-lan
 MAP=~/path/to/MyMap.w3x
 GAME="/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III"
 MAPS="$HOME/Library/Application Support/Blizzard/Warcraft III/Maps"
+SECOND="$SLOP/.slop/client-2"     # the second client's home (see step 2)
 BIN="$SLOP/host/target/debug/wc3-slop-lan"
 WC3="$SLOP/harness/wc3.sh"
 ```
@@ -28,11 +29,20 @@ mkdir -p "$MAPS/slop"
 `--seat auto` picks the first slot the map doesn't define. `map` prints it as `free slot`, and
 the host must use the same one (step 5).
 
-## 2. One data folder for both
+## 2. A data folder for each
 
-Both clients use your normal data folder (`~/Library/Application Support/Blizzard/Warcraft III`),
-so both see the staged map. The library keeps their files apart by naming each file after the
-player that client plays: `slop-trace-p0-0001.txt`, `slop-beat-p1.txt`.
+Two games on one user folder break real maps: the second one's map script does not run. So the
+second client runs with its home somewhere else, which gives it a user folder of its own, and
+its Maps folder links to yours so it sees the staged map:
+
+```sh
+mkdir -p "$SECOND/Library/Application Support/Blizzard/Warcraft III"
+ln -s "$MAPS" "$SECOND/Library/Application Support/Blizzard/Warcraft III/Maps"
+```
+
+`CFFIXED_USER_HOME` is what moves a macOS app's `~/Library`; `HOME` goes with it. The library
+also names each file after the player that client plays (`slop-trace-p0-0001.txt`,
+`slop-beat-p1.txt`), so the traces are easy to tell apart.
 
 ## 3. The page and its server
 
@@ -66,7 +76,7 @@ the clients one at a time so you know which is which.
 ```sh
 "$GAME" -editor -launch -windowmode windowed -nowfpause > /dev/null 2>&1 &
 "$WC3" who          # wait for number 1; the key is the game's web UI port
-"$GAME" -editor -launch -windowmode windowed -nowfpause > /dev/null 2>&1 &
+HOME="$SECOND" CFFIXED_USER_HOME="$SECOND" "$GAME" -editor -launch -windowmode windowed -nowfpause > /dev/null 2>&1 &
 "$WC3" who          # wait for number 2
 "$WC3" raw 1 PlayOffline '{}'
 "$WC3" raw 2 PlayOffline '{}'

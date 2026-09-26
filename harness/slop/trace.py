@@ -1,7 +1,7 @@
 """Reading back what the map library writes: the lockstep trace and its heartbeat.
 
-Every client writes its files under its own player's slot (slop-trace-p0-0001.txt, ...), so the
-clients of one machine can share a data folder. A trace line is `<sequence> t<ticks> h<handles> <category> <text>`; the heartbeat is the
+Every client writes its files under its own player's slot (slop-trace-p0-0001.txt, ...), in its
+own user folder. A trace line is `<sequence> t<ticks> h<handles> <category> <text>`; the heartbeat is the
 category `beat`, with `key=value` pairs and a `p<slot>(key=value ...)` part per player.
 """
 import pathlib
@@ -21,15 +21,19 @@ def clear(folder):
             stale.unlink(missing_ok=True)
 
 
-def chunks(folder, slot):
-    """The trace files of the client playing that slot, in order."""
-    return sorted(pathlib.Path(folder).glob(f'{TRACE}-p{slot}-*.txt'))
+def _folders(folders):
+    return [pathlib.Path(folders)] if isinstance(folders, (str, pathlib.Path)) else [pathlib.Path(f) for f in folders]
 
 
-def read(folder, slot):
+def chunks(folders, slot):
+    """The trace files of the client playing that slot, in order, from whichever folder has them."""
+    return sorted((c for f in _folders(folders) for c in f.glob(f'{TRACE}-p{slot}-*.txt')), key=lambda c: c.name)
+
+
+def read(folders, slot):
     """Every line the client playing that slot has written, oldest first."""
     lines = []
-    for chunk in chunks(folder, slot):
+    for chunk in chunks(folders, slot):
         lines += re.findall(r'Preload\( "(.*)" \)', chunk.read_text(errors='replace'))
     lines.sort(key=lambda line: int(line.split(' ', 1)[0]) if line.split(' ', 1)[0].isdigit() else 0)
     return lines
@@ -100,6 +104,45 @@ def parse_unit(line):
         return None
     return dict(player=int(match.group(1)), id=int(match.group(2)), type=match.group(3), x=int(match.group(4)),
                 y=int(match.group(5)), life=int(match.group(6)), order=match.group(7))
+
+
+def polling_folder(folders, slot):
+    """The folder where the client playing that slot polls for commands, if any."""
+    return next((f for f in _folders(folders) if (f / f'{BEAT}-p{slot}.txt').exists()), None)
+
+
+CREATED = re.compile(r'p(\d+) id=(\d+) type=(\S+) at=(-?\d+),(-?\d+)')
+
+
+def parse_created(line):
+    match = CREATED.search(line)
+    return match and dict(player=int(match.group(1)), id=int(match.group(2)), type=match.group(3),
+                          x=int(match.group(4)), y=int(match.group(5)))
+
+
+def parse_fields(line):
+    """The key=value pairs of an 'inspect' or 'hit' line, numbers as numbers."""
+    fields = dict(re.findall(r'(\w+)=(\S+)', line))
+    out = {}
+    for key, value in fields.items():
+        if re.fullmatch(r'-?\d+', value):
+            out[key] = int(value)
+        elif re.fullmatch(r'-?\d+\.\d+', value):
+            out[key] = float(value)
+        else:
+            out[key] = value
+    if 'dmg' in out:
+        base, dice = str(out['dmg']).split('+')
+        number, sides = dice.split('d')
+        out['damage_min'] = int(base) + int(number)
+        out['damage_max'] = int(base) + int(number) * int(sides)
+    if 'at' in out and ',' in str(out['at']):
+        x, y = str(out['at']).split(',')
+        out['x'], out['y'] = int(x), int(y)
+    if 'life' in out and '/' in str(out['life']):
+        life, most = str(out['life']).split('/')
+        out['life'], out['max_life'] = int(life), int(most)
+    return out
 
 
 def write_command(folder, slot, line, command_id):

@@ -10,6 +10,7 @@ none. Artifacts (host log, each client's trace) are kept per test under .slop/ n
 """
 import importlib.util
 import inspect
+import sys
 import time
 import traceback
 
@@ -18,14 +19,22 @@ from .session import NeedsLibrary, Session, TestFailed
 
 
 def load_tests(config: Config):
-    if config.tests_file is None:
+    """Every test_* function of the config's tests files (tests.file: one file or a list), in
+    file order, then source order."""
+    if not config.tests_files:
         raise RuntimeError('no tests.file in the config')
-    spec = importlib.util.spec_from_file_location('slop_tests', config.tests_file)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    cases = [(name, fn) for name, fn in inspect.getmembers(module, inspect.isfunction)
-             if name.startswith('test_') and fn.__module__ == module.__name__]
-    cases.sort(key=lambda case: inspect.getsourcelines(case[1])[1])
+    cases = []
+    for number, path in enumerate(config.tests_files):
+        spec = importlib.util.spec_from_file_location(f'slop_tests_{number}', path)
+        module = importlib.util.module_from_spec(spec)
+        # The tests' own folder is importable, so tests files can share a helper module
+        if str(path.parent) not in sys.path:
+            sys.path.insert(0, str(path.parent))
+        spec.loader.exec_module(module)
+        found = [(name, fn) for name, fn in inspect.getmembers(module, inspect.isfunction)
+                 if name.startswith('test_') and fn.__module__ == module.__name__]
+        found.sort(key=lambda case: inspect.getsourcelines(case[1])[1])
+        cases += found
     return cases
 
 

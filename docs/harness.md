@@ -49,11 +49,13 @@ down                   stop it
 - **What it leaves:** its page stays in the game's webui folder. The page that was there first
   is kept as `index.html.before-slop` (`harness/slop/webui.py`).
 - **The staged map** goes to `~/Library/Application Support/Blizzard/Warcraft III/Maps/<map.folder>/`.
-  Both clients use that data folder.
+  The second client has a user folder of its own (under `second_home`) whose `Maps/<map.folder>`
+  links there.
 
 ## Writing tests
 
-The tests file is plain Python: every `test_*` function is a test. Each one gets a fresh game
+A tests file is plain Python: every `test_*` function is a test. `tests.file` may name one file or
+a list, and a helper module beside them can be imported by all of them (`maps/warcraft-maul/maul.py`). Each one gets a fresh game
 (a `Session`) as its argument and fails by raising. After each test the harness also fails it
 if the host saw a desync, or if the clients' traces differ (handle ids aside, see
 [library.md](library.md#what-it-does)).
@@ -92,6 +94,11 @@ client costs time, not a test. `--fresh` launches the clients again for every te
 | `units(player, client=0)` | the player's units: `[{id, type, x, y, life, order}]` |
 | `order(player, unit, name, *args)` | `order(0, id, 'move', x, y)`, `order(0, id, 'stop')`, `order(0, id, 'attack', target)` |
 | `build(player, builder, type, x, y)` | a build order; the type is its four letters |
+| `upgrade(player, unit, type)` | upgrades a building |
+| `create(player, type, x, y, count=1, life=None, frozen=False, rooted=False)` | makes units for a player (targets, creeps): `[{id, type, x, y}]`; life is set and the units frozen (paused) or rooted (can't move, still act) as they are made |
+| `watch_casts(player)` | traces every spell that player's units cast from now on; `casts()` reads them: `[{src, srctype, ability, dst}]` |
+| `watch(player)` | traces every hit on that player's units from now on; `hits()` reads them (with `raw`, the amount before armor) |
+| `remove(player, unit)` | takes one of the player's units out of the game, without a death |
 | `control(line)` | any host command; returns its one-line reply |
 
 | reading | |
@@ -99,6 +106,10 @@ client costs time, not a test. `--fresh` launches the clients again for every te
 | `beat(client=0)` | the newest heartbeat: `beat['tick']`, the map's keys (`beat['wave']`), `beat.gold(slot)`, `beat.lumber(slot)`, `beat.player(slot, key)` |
 | `trace(client=0)` | every trace line so far |
 | `events(kind, client=0)` | trace lines of one category (`unit`, `order`, `slop`, or the map's own) |
+| `inspect(unit, *abilities)` | a unit now: `type`, `owner`, `x`, `y`, `order`, `life`, `max_life`, `mana`, `damage_min`/`max`, `cd`, `range`, `armor`, `speed`, and each ability's level |
+| `hits(client=0)` | the watched hits: `[{src, srctype, dst, amount, raw, atk, attack}]` |
+| `units_later(...)`, `create_later(...)`, `inspect_later(...)`, `beat_after(client=0)` | the same requests without waiting: a `Pending` with `ready()` and `result()`, so a test can keep several going at once (Warcraft Maul's race tests build for two players side by side this way) |
+| `finish(pending, timeout=15)` | waits for a `Pending` and returns its result, or fails |
 | `wait_for(what, predicate, timeout=30, client=0)` | waits until `predicate(beat)` holds, or fails |
 | `wait(what, condition, timeout=30)` | waits until `condition()` holds, or fails |
 | `check_in_step()` | fails on a desync or differing traces (runs after every test anyway) |
@@ -110,9 +121,10 @@ client costs time, not a test. `--fresh` launches the clients again for every te
 - **A player** is a 0-based slot: 0 is red, 1 is blue. Named players take the map's human slots
   in order.
 - **A client** is 0 or 1: the game playing the first or the second player's slot, in slot
-  order. Both games share your data folder; the library names each game's files by the player
-  it plays. While the game is in step, both clients hold the same trace, so client 0 is usually
-  enough. (`screenshot(client)` goes by launch order instead, which usually matches.)
+  order. Each game has a user folder of its own (the second runs with its home at
+  `second_home`), and the library names each game's files by the player it plays. While the game
+  is in step, both clients hold the same trace, so client 0 is usually enough.
+  (`screenshot(client)` goes by launch order instead, which usually matches.)
 
 ## MCP
 

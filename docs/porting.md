@@ -158,8 +158,12 @@ handling are not.
   Check that `-editor` still skips the Battle.net login when the game is started directly
   (lead).
 - **Data folder:** the default is `Documents\Warcraft III` (CustomMapData, Maps, logs); set
-  `data` in `configuration.toml` to it. Both clients share it, as on macOS, since the library names its
-  files by player. Check that two games run side by side on one folder there too (lead).
+  `data` in `configuration.toml` to it. Each client needs a user folder of its own: two games on
+  one folder break real maps (the second one's map script does not run). On macOS the second
+  client gets one by starting with `HOME` and `CFFIXED_USER_HOME` pointed at `second_home`; on
+  Windows the folder comes from the shell's known folders, not the environment, so that trick
+  does not carry over - a second Windows user, a redirected Documents folder, or a game flag
+  (unknown) are the leads. Under Wine, a second prefix per client does it.
 
 ### 2.2 Activation
 
@@ -211,17 +215,18 @@ Wine, while the host and harness run natively on Linux.
 
 ### 3.1 Clients
 
-- **One prefix for both clients**, as on macOS: the library names its files by player, so both
-  games can use the prefix's `drive_c/users/<user>/Documents/Warcraft III`:
+- **A prefix per client:** two games on one user folder break real maps (the second one's map
+  script does not run), so the second client gets a prefix of its own, with its
+  `drive_c/users/<user>/Documents/Warcraft III/Maps/<folder>` linked to the first's:
   ```sh
   WINEPREFIX=~/wc3 wine "C:/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe" -launch -windowmode windowed -nowfpause
+  WINEPREFIX=~/wc3-2 wine "C:/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe" -launch -windowmode windowed -nowfpause
   ```
-  (twice). In `configuration.toml`'s `[game]`: `launcher = ["env", "WINEPREFIX=...", "wine"]`, `binary` and `webui`
-  inside the prefix, and `data` at that Documents folder. If two games in one prefix fight
-  (a single wineserver shares state), a second prefix with its `Maps/<folder>` linked to the
-  first is the fallback.
+  In `configuration.toml`'s `[game]`: `launcher = ["env", "WINEPREFIX=...", "wine"]`, `binary` and
+  `webui` inside the prefix, and `data` at that Documents folder. The harness's `second_home`
+  (a HOME for the second client, which is how macOS moves it) needs a per-client launcher for
+  this - not written yet.
 - **The install:** Battle.net under Wine is the usual way to install it (Lutris has scripts).
-  Battle.net under Wine is the usual way to install it (Lutris has scripts).
 - **Launching directly:** check that `-editor` skips the login when the exe is started directly
   under Wine (lead).
 

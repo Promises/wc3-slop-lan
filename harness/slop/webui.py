@@ -61,8 +61,10 @@ class Server:
         return json.loads(self._open('/command', dict(to=str(to), verb=verb, **fields)))
 
     def checked_in(self):
-        """Instances whose page has heard from the game (any screen)."""
-        return sum(1 for v in self.instances().values() if v['state'].get('screen'))
+        """Instances whose page has checked in: it only does once its socket to the game is open.
+        A client on the Battle.net login screen may not have reported a screen yet, and is ready
+        all the same: PlayOffline works from there."""
+        return len(self.instances())
 
     def port_of(self, number):
         return next((int(k) for k, v in self.instances().items() if v['number'] == number), None)

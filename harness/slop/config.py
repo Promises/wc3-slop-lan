@@ -46,12 +46,13 @@ class Config:
     clients: int = 2
     names: list = field(default_factory=lambda: ['red', 'blue'])
     # [tests]
-    tests_file: pathlib.Path | None = None
+    tests_files: list = field(default_factory=list)
     # configuration.toml [game]
     configuration: pathlib.Path | None = None
     game: pathlib.Path | None = None
     webui_dir: pathlib.Path | None = None
     data: pathlib.Path | None = None
+    second_home: pathlib.Path | None = None
     args: list = field(default_factory=list)
     launcher: list = field(default_factory=list)
     server: str = ''
@@ -76,6 +77,20 @@ class Config:
     @property
     def custom_map_data(self):
         return self.data / 'CustomMapData'
+
+    def home_for(self, client):
+        """The home folder a client runs with: yours for the first, second_home for the second."""
+        return pathlib.Path.home() if client == 0 else self.second_home
+
+    def data_for(self, client):
+        """A client's user folder: `data`, moved under that client's home."""
+        if client == 0:
+            return self.data
+        try:
+            return self.second_home / self.data.relative_to(pathlib.Path.home())
+        except ValueError:
+            raise ConfigError(f'[game] data ({self.data}) is not under your home folder, so the second '
+                              f'client\'s user folder cannot be found from second_home')
 
     @property
     def launch(self):
@@ -187,7 +202,8 @@ def load(explicit=None, map_name=None):
     config.inject = bool(get('library', 'inject', config.inject))
     config.clients = int(get('clients', 'count', config.clients))
     config.names = list(get('clients', 'names', config.names))
-    config.tests_file = resolve(get('tests', 'file'))
+    files = get('tests', 'file', [])
+    config.tests_files = [resolve(f) for f in ([files] if isinstance(files, str) else files)]
     _load_game(config)
 
     if config.host_mode not in ('active', 'hidden'):
@@ -211,6 +227,7 @@ def _load_game(config):
 
     config.configuration = source
     config.game, config.webui_dir, config.data = resolve('binary'), resolve('webui'), resolve('data')
+    config.second_home = resolve('second_home')
     config.args = [_expand(str(a)) for a in game['args']]
     config.launcher = [_expand(str(a)) for a in game['launcher']]
     config.server = game['server'].rstrip('/')

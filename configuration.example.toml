@@ -14,8 +14,13 @@ binary = "/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/M
 # The folder the game serves its menus from; the harness puts its page here
 webui = "/Applications/Warcraft III/_retail_/webui"
 
-# The game's user folder, which holds Maps and CustomMapData. Both clients share it.
+# The game's user folder, which holds Maps and CustomMapData
 data = "~/Library/Application Support/Blizzard/Warcraft III"
+
+# The second client's home folder: it runs with HOME pointed here, so it gets a user folder of
+# its own. Two games on one user folder break real maps (the second one's map script does not
+# run), so this is not optional; the harness creates it and links the staged map into it.
+second_home = ".slop/client-2"
 
 # How each client is started. -editor skips the Battle.net login; -nowfpause keeps a game
 # running while its window is not focused.

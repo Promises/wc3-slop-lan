@@ -49,8 +49,8 @@ def check(config):
     (ok if config.host_binary.exists() else bad)(f'host {config.host_binary}' + ('' if config.host_binary.exists() else ' (slop up builds it; needs cargo)'))
     for tool in ('lldb', 'lsof', 'curl'):
         (ok if shutil.which(tool) else bad)(f'{tool} on PATH')
-    if config.tests_file:
-        (ok if config.tests_file.exists() else bad)(f'tests {config.tests_file}')
+    for tests in config.tests_files:
+        (ok if tests.exists() else bad)(f'tests {tests}')
     if config.map_file.is_file() and config.host_binary.exists():
         facts = subprocess.run([str(config.host_binary), 'map', str(config.map_file)], capture_output=True, text=True)
         if facts.returncode:
@@ -109,8 +109,8 @@ def main(argv=None):
             return 0
         if args.command in ('check', 'up', 'test', 'mcp'):
             config = config_module.load(args.config, args.map)
-        elif args.config or getattr(args, 'map', None):
-            sys.exit(f'slop {args.command} works on the running game; it takes no map')
+        # The other commands act on the running game, which knows its own map; -c is not needed
+        # there, and harmless
     except config_module.ConfigError as problem:
         sys.exit(str(problem))
 

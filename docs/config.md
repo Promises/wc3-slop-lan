@@ -53,7 +53,7 @@ count = 2                      # 1 or 2
 names = ["red", "blue"]        # player names, one per client
 
 [tests]
-file = "tests.py"
+file = "tests.py"              # or a list: ["tests.py", "races.py"]
 ```
 
 **`map.file`** is the only part a map usually needs, and only when the map isn't in its
@@ -74,6 +74,7 @@ map = "any-map"                    # the default map: a folder under maps/
 binary = "/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III"
 webui = "/Applications/Warcraft III/_retail_/webui"        # the harness puts its page here
 data = "~/Library/Application Support/Blizzard/Warcraft III"  # holds Maps and CustomMapData
+second_home = ".slop/client-2"     # the second client's home: its own user folder, Maps linked to yours
 args = ["-editor", "-launch", "-windowmode", "windowed", "-nowfpause"]
 launcher = []                      # put in front of the binary, e.g. ["env", "WINEPREFIX=...", "wine"]
 server = "http://127.0.0.1:8777"   # the web UI server; written into the page when it is installed
