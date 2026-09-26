@@ -56,6 +56,7 @@ class Config:
     args: list = field(default_factory=list)
     launcher: list = field(default_factory=list)
     server: str = ''
+    activator: pathlib.Path | None = None
 
     @property
     def root(self):
@@ -73,6 +74,18 @@ class Config:
     @property
     def maps(self):
         return self.data / 'Maps'
+
+    @property
+    def windows_build(self):
+        """The game is the Windows build (on Windows or under Wine): its menus cannot load our page,
+        so slop-activator and the bridge stand in for it."""
+        return self.game.suffix.lower() == '.exe'
+
+    @property
+    def activator_dir(self):
+        """Where slop-activator writes its instance files: %TEMP%\\slop-activator of the user the
+        data folder belongs to (<user>/Documents/Warcraft III -> <user>/AppData/Local/Temp)."""
+        return self.data.parents[1] / 'AppData' / 'Local' / 'Temp' / 'slop-activator'
 
     @property
     def custom_map_data(self):
@@ -212,6 +225,9 @@ def load(explicit=None, map_name=None):
         raise ConfigError(f'{path.name}: host.seat is a slot number or "auto"')
     if not 1 <= config.clients <= 2:
         raise ConfigError(f'{path.name}: clients.count is 1 or 2')
+    if config.windows_build and config.clients > 1:
+        raise ConfigError(f'{path.name}: the Windows build runs one client for now (a second needs a Wine prefix '
+                          f'or user of its own; see docs/porting.md): clients.count = 1')
     if len(config.names) < config.clients:
         raise ConfigError(f'{path.name}: clients.names needs a name per client')
     return config
@@ -223,10 +239,15 @@ def _load_game(config):
     base = (source or CONFIGURATION_EXAMPLE).parent
 
     def resolve(key):
-        return (base / _expand(game[key])).resolve()
+        # Absolute, but symlinks kept: Wine links a prefix's Documents to the real one, and the
+        # activator's folder is found from the data folder's place in the prefix
+        return pathlib.Path(os.path.abspath(base / _expand(game[key])))
 
     config.configuration = source
-    config.game, config.webui_dir, config.data = resolve('binary'), resolve('webui'), resolve('data')
+    config.game, config.data = resolve('binary'), resolve('data')
+    config.webui_dir = resolve('webui') if game['webui'] else None
+    config.activator = resolve('activator') if game['activator'] else \
+        REPO / 'activator/target/x86_64-pc-windows-gnu/release/slop-activator.exe'
     config.second_home = resolve('second_home')
     config.args = [_expand(str(a)) for a in game['args']]
     config.launcher = [_expand(str(a)) for a in game['launcher']]

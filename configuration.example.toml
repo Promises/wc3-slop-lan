@@ -11,8 +11,15 @@ map = "any-map"
 # The game's executable
 binary = "/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III"
 
-# The folder the game serves its menus from; the harness puts its page here
+# The folder the game serves its menus from; the harness puts its page here. The Windows build
+# has none (its menus come from its packed data): leave it empty there, and slop-activator and
+# harness/webui/bridge.py play the page's part.
 webui = "/Applications/Warcraft III/_retail_/webui"
+
+# The Windows build only: slop-activator.exe, which keeps the games on their LAN provider (see
+# activator/). Empty: the one built in activator/ (cargo build --release --target
+# x86_64-pc-windows-gnu), or a downloaded release put there.
+activator = ""
 
 # The game's user folder, which holds Maps and CustomMapData
 data = "~/Library/Application Support/Blizzard/Warcraft III"
@@ -33,15 +40,16 @@ launcher = []
 server = "http://127.0.0.1:8777"
 
 
-# Windows (untested; see docs/porting.md):
+# Linux + Wine (one client for now; see docs/porting.md): wine-staging 11.6 or newer, not Proton
+#
+# binary = "~/Games/wc3/drive_c/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe"
+# webui = ""
+# data = "~/Games/wc3/drive_c/users/${USER}/Documents/Warcraft III"
+# args = ["-launch", "-windowmode", "windowed", "-nowfpause"]
+# launcher = ["env", "WINEPREFIX=/home/me/Games/wc3", "prime-run", "wine"]
+
+# Windows (the harness itself is untested there; see docs/porting.md):
 #
 # binary = "C:/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe"
-# webui = "C:/Program Files (x86)/Warcraft III/_retail_/webui"
+# webui = ""
 # data = "~/Documents/Warcraft III"
-
-# Linux + Wine (untested; see docs/porting.md):
-#
-# binary = "~/wc3/drive_c/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe"
-# webui = "~/wc3/drive_c/Program Files (x86)/Warcraft III/_retail_/webui"
-# data = "~/wc3/drive_c/users/${USER}/Documents/Warcraft III"
-# launcher = ["env", "WINEPREFIX=/home/me/wc3", "wine"]

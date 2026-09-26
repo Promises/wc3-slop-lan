@@ -18,6 +18,7 @@ import pathlib
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import uuid
 
@@ -26,6 +27,7 @@ from . import config as config_module
 from .config import REPO, Config
 
 ACTIVATE = REPO / 'harness/activate.sh'
+BRIDGE = REPO / 'harness/webui/bridge.py'
 # The running game, whichever map it is: one at a time, since a session refuses to start while
 # Warcraft III runs
 STATE = REPO / '.slop' / 'session.json'
@@ -92,6 +94,7 @@ class Session:
         self.artifacts = config.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-{name}"
         self.server = webui.Server(config.server)
         self.started_server = False
+        self.started_activator = False
         self.client_pids = []
         # Every game this session started, from the moment it started: stop() kills them all,
         # also one that never checked in
@@ -111,7 +114,7 @@ class Session:
     def start(self, timeout=240):
         """Launches the clients and plays the first game on them."""
         config = self.config
-        running = subprocess.run(['pgrep', '-f', str(config.game)], capture_output=True, text=True).stdout.split()
+        running = subprocess.run(['pgrep', '-f', re.escape(str(config.game))], capture_output=True, text=True).stdout.split()
         if running:
             raise RuntimeError(f'Warcraft III is already running (pid {", ".join(running)}): close it, '
                                'or `slop down` if a session was left up')
@@ -122,17 +125,27 @@ class Session:
         self._stage()
 
         self.started_server = self.server.ensure(self.artifacts / 'webui.log')
-        webui.install_page(config.webui_dir, config.server)
+        if config.windows_build:
+            self._ensure_activator()
+        else:
+            webui.install_page(config.webui_dir, config.server)
         self.server.reset()
         for index in range(config.clients):
             home = config.home_for(index)
             home.mkdir(parents=True, exist_ok=True)
             env = dict(os.environ, HOME=str(home), CFFIXED_USER_HOME=str(home))
+            known = self._instance_files()
             self.launched.append(subprocess.Popen(config.launch, env=env, stdout=subprocess.DEVNULL,
                                                   stderr=subprocess.DEVNULL, start_new_session=True).pid)
+            if config.windows_build:
+                self._start_bridge(index, known)
             self._wait(lambda: self.server.checked_in() >= index + 1, 90, f'client {index + 1} to start')
-            # Offline: LAN needs no Battle.net, and a sign-in can sit in the login queue for minutes
-            self.server.command(index + 1, 'raw', message='PlayOffline', payload={})
+            # Offline: LAN needs no Battle.net, and a sign-in can sit in the login queue for minutes.
+            # Not on the Windows build: its offline mode is switched off (FeatureFlags), and there
+            # PlayOffline starts a Battle.net sign-in that pulls the client out of the LAN game;
+            # the local provider works from the login screen as it is
+            if not config.windows_build:
+                self.server.command(index + 1, 'raw', message='PlayOffline', payload={})
             self.client_pids.append(self._client_pid(index + 1))
         self.log(f'{config.clients} client(s) up, offline')
         self._play(timeout)
@@ -180,7 +193,8 @@ class Session:
         # "logged out during game" path sends StartLogin), so it is sent offline again after
         for number in range(1, self.config.clients + 1):
             self.server.command(number, 'raw', message='ScoreScreenClose', payload={})
-            self.server.command(number, 'raw', message='PlayOffline', payload={})
+            if not self.config.windows_build:
+                self.server.command(number, 'raw', message='PlayOffline', payload={})
         try:
             self._wait(lambda: not self._screens() & {'SCORE_SCREEN', 'GAME_LOBBY'}, 10, 'the menus')
         except TestFailed:
@@ -194,6 +208,10 @@ class Session:
             trace.clear(folder)
         self._start_host()
         for number in range(1, config.clients + 1):
+            if config.windows_build:
+                # slop-activator switches the provider the join rebuilds to TCPN; the bridge waits for it
+                self.server.command(number, 'lanjoin', gameName=self.game_name, keepProvider=False)
+                continue
             subprocess.run(['bash', str(ACTIVATE), str(number), str(self.client_pids[number - 1])],
                            check=True, capture_output=True, timeout=90,
                            env=dict(os.environ, WC3_SERVER=config.server, WC3_GAME=str(config.game)))
@@ -276,6 +294,8 @@ class Session:
         self._stop_host()
         for pid in set(self.client_pids) | set(self.launched):
             subprocess.run(['kill', '-9', str(pid)], capture_output=True)
+        if self.started_activator:
+            subprocess.run(['pkill', '-f', re.escape(self.config.activator.name)], capture_output=True)
         if self.started_server:
             self.server.stop()
             subprocess.run(['pkill', '-f', str(webui.SERVER)], capture_output=True)
@@ -287,7 +307,8 @@ class Session:
         """What `slop down` and later commands need to find this session again."""
         state = dict(name=self.name, game_name=self.game_name, artifacts=str(self.artifacts), host_pid=self.host_pid,
                      client_pids=self.client_pids, started_server=self.started_server, library=self.library,
-                     seat=self.seat, client_slots=self.client_slots, launched=self.launched)
+                     seat=self.seat, client_slots=self.client_slots, launched=self.launched,
+                     started_activator=self.started_activator)
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps(dict(state, config=str(self.config.path)), indent=1))
         self.saved = True
@@ -305,6 +326,7 @@ class Session:
         session.started_server, session.library, session.seat = state['started_server'], state['library'], state['seat']
         session.client_slots = state.get('client_slots', [])
         session.launched = state.get('launched', [])
+        session.started_activator = state.get('started_activator', False)
         session.saved = True
         return session
 
@@ -509,7 +531,43 @@ class Session:
             time.sleep(1)
         raise TestFailed(f'timed out after {timeout}s waiting for {what}')
 
+    def _ensure_activator(self):
+        """slop-activator running in the game's prefix (or on Windows): one serves every game, and
+        one already running is kept."""
+        config = self.config
+        if subprocess.run(['pgrep', '-f', re.escape(config.activator.name)], capture_output=True).returncode == 0:
+            return
+        if not config.activator.exists():
+            raise RuntimeError(f'no slop-activator at {config.activator}: build it (activator/) or download a release')
+        log = open(self.artifacts / 'activator.log', 'w')
+        subprocess.Popen([*config.launcher, str(config.activator)], stdout=log, stderr=subprocess.STDOUT,
+                         start_new_session=True)
+        self.started_activator = True
+
+    def _instance_files(self):
+        folder = self.config.activator_dir
+        return set(folder.glob('*.json')) if self.config.windows_build and folder.is_dir() else set()
+
+    def _start_bridge(self, index, known, timeout=180):
+        """Waits for slop-activator to find the new game's menus, then starts the bridge that stands
+        in for our page there."""
+        found = []
+
+        def new_game():
+            found[:] = sorted(self._instance_files() - known)
+            return bool(found)
+
+        self._wait(new_game, timeout, f"client {index + 1}'s menus (slop-activator's instance file)")
+        log = open(self.artifacts / f'bridge-{index + 1}.log', 'w')
+        subprocess.Popen([sys.executable, str(BRIDGE), str(found[0]), self.config.server], stdout=log,
+                         stderr=subprocess.STDOUT, start_new_session=True)
+
     def _client_pid(self, number):
+        if self.config.windows_build:
+            # Under Wine the menus' socket belongs to wineserver: the newest game process instead
+            out = subprocess.run(['pgrep', '-n', '-f', '^' + re.escape(str(self.config.game))],
+                                 capture_output=True, text=True).stdout
+            return int(out.split()[0])
         port = self.server.port_of(number)
         out = subprocess.run(['lsof', '-ti', f'tcp:{port}', '-sTCP:LISTEN'], capture_output=True, text=True).stdout
         return int(out.split()[0])

@@ -44,10 +44,15 @@ def check(config):
     (ok if config.map_file.is_file() else bad)(f'map file {config.map_file}'
                                                + ('' if config.map_file.is_file() or not config.build else f' (build: {config.build})'))
     (ok if config.game.exists() else bad)(f'game {config.game}')
-    (ok if config.webui_dir.is_dir() else bad)(f"the game's webui folder {config.webui_dir}")
+    if config.windows_build:
+        (ok if config.activator.exists() else bad)(
+            f'slop-activator {config.activator}' + ('' if config.activator.exists() else
+                                                    ' (cargo build --release --target x86_64-pc-windows-gnu in activator/, or a release)'))
+    else:
+        (ok if config.webui_dir and config.webui_dir.is_dir() else bad)(f"the game's webui folder {config.webui_dir}")
     (ok if config.data.is_dir() else bad)(f"the game's data folder {config.data}")
     (ok if config.host_binary.exists() else bad)(f'host {config.host_binary}' + ('' if config.host_binary.exists() else ' (slop up builds it; needs cargo)'))
-    for tool in ('lldb', 'lsof', 'curl'):
+    for tool in (('pgrep',) if config.windows_build else ('lldb', 'lsof', 'curl')):
         (ok if shutil.which(tool) else bad)(f'{tool} on PATH')
     for tests in config.tests_files:
         (ok if tests.exists() else bad)(f'tests {tests}')
