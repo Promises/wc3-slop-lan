@@ -49,7 +49,7 @@ do
     local pending = {}
     local sequence, ticks, chunk, attempt, lastFileCommand = 0, 0, 0, 0, 0
     local started = false
-    local urgent = {slop = true, unit = true, order = true}
+    local urgent = {slop = true, order = true}
     local commandHooks, beatHooks, playerHooks = {}, {}, {}
 
     local function fourcc(s)
@@ -220,6 +220,9 @@ do
                 math.floor(GetWidgetLife(u)), OrderId2String(order) or tostring(order)))
         end)
         Slop.note('unit', 'p' .. index .. ' end')
+        -- The list at once, as one chunk: flushed a line at a time, a harness polling a player's
+        -- units every second used up the chunks in minutes
+        Slop.flush()
     end
 
     -- .order <unit> <order> [x y | target]: an order to one of the player's own units
@@ -386,6 +389,17 @@ do
             SetWidgetLife(u, life)
         end
         Slop.note('order', 'p' .. index .. ' hp ' .. tostring(words[2]) .. ' ' .. life .. (u and ' set' or ' rejected'))
+    end
+
+    -- .mana <unit> <mana>: sets one of the player's units' current mana (up to its maximum)
+    builtins['.mana'] = function(index, words)
+        local u = unitByRef(words[2], index)
+        local mana = tonumber(words[3])
+        if u and mana then
+            SetUnitState(u, UNIT_STATE_MANA, mana)
+        end
+        Slop.note('order', 'p' .. index .. ' mana ' .. tostring(words[2]) .. ' ' .. tostring(words[3])
+            .. ((u and mana) and ' set' or ' rejected'))
     end
 
     -- .upgrade <unit> <type>: upgrades one of the player's buildings to that type (the

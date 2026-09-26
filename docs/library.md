@@ -65,6 +65,7 @@ They start with a dot, so they can't clash with a map's own chat commands.
 | `.watch` | from now on, every hit on the player's units: `hit src=… srctype=… dst=… amount=… raw=… atk=pierce attack=true`; `raw` is the amount before the target's armor (as the map's own damage triggers left it) |
 | `.casts` | from now on, every spell the player's units cast: `cast src=… srctype=… ability=A03D dst=…` (dst 0 for no unit) |
 | `.hp <unit> <life>` | sets one of the player's units' life, maximum included |
+| `.mana <unit> <mana>` | sets one of the player's units' current mana (up to its maximum) |
 | `.freeze <unit>` | pauses one of the player's units where it stands; it can still be hit (a target that stays put) |
 | `.upgrade <unit> <type>` | upgrades one of the player's buildings |
 | `.kill <unit>` | kills one of the player's units |

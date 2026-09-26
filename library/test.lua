@@ -70,6 +70,7 @@ function BlzGetUnitMaxHP(u) return u.maxlife or 100 end
 function BlzSetUnitMaxHP(u, v) u.maxlife = v end
 function SetWidgetLife(u, v) u.life = v end
 function GetUnitState() return 0 end
+function SetUnitState(u, state, v) u[state] = v end
 UNIT_STATE_MANA, UNIT_WEAPON_RF_ATTACK_RANGE = 'mana', 'range'
 function BlzGetUnitBaseDamage() return 59 end
 function BlzGetUnitDiceNumber() return 1 end
@@ -153,6 +154,16 @@ check('a heartbeat was written: ' .. tostring(beat), beat and beat:match('wave=3
 fromHost('0 .units')
 check('.units lists the unit by ref', find('unit p0 id=1 type=h000 at=100,%-51 life=420 order=0') ~= nil)
 check('.units ends the list', find('unit p0 end') ~= nil)
+local function chunkOf(pattern)
+    for n = 1, 9999 do
+        local chunk = files[string.format('slop-trace-p1-%04d.txt', n)]
+        if not chunk then return nil end
+        for _, line in ipairs(chunk) do
+            if line:match(pattern) then return n end
+        end
+    end
+end
+check('.units writes the list as one chunk', chunkOf('unit p0 id=1 ') ~= nil and chunkOf('unit p0 id=1 ') == chunkOf('unit p0 end'))
 
 fromHost('0 .order 1 move 300 400')
 check('a point order was issued', orders[1] and orders[1][2] == 'move' and orders[1][3] == 300)
@@ -202,6 +213,8 @@ Slop.flush()
 check('.inspect traces the unit and the levels asked for', find('inspect id=2 type=u006 owner=p13 at=%-2000,4700 order=0 life=777/777 mana=0 dmg=59%+1d2 cd=1.50 range=800 armor=2 speed=0 A0v1=2 B000=0') ~= nil)
 fromHost('13 .hp 3 5000')
 check('.hp sets life', created[2].maxlife == 5000 and created[2].life == 5000)
+fromHost('13 .mana 3 4')
+check('.mana sets mana', created[2].mana == 4 and find('order p13 mana 3 4 set') ~= nil)
 fromHost('13 .freeze 3')
 check('.freeze pauses the unit', created[2].paused == true)
 fromHost('13 .watch')
