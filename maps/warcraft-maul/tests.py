@@ -1,19 +1,18 @@
 """Warcraft Maul, played by real clients on the host.
 
 Each test gets a fresh two-player game (red = 0, blue = 1). The map's hooks (SlopHooks.ts in the
-map repo) take chat commands ("-gold 500") and PlayerSync messages ("@race-pick:I00W") as any
+map repo) take chat commands ("-gold 500") and PlayerSync messages ("@race-pick:I006") as any
 player, and add lives, wave and creeps to the heartbeat, and kills and towers per player.
 """
+import time
+
+import maul
+from maul import RED, sync
 from slop import TestFailed
 
-# Race shop items; a normal pick costs the starting lumber
-HUMAN_TOWN_HALL = 'I00W'
-HIGH_ELF_BARRACKS = 'I007'
-
-
-def sync(game, player, message):
-    """A PlayerSync message as a player: what their own UI would have sent."""
-    game.cmd(player, '@' + message)
+# Race shop items (Beginner races); a normal pick costs the starting lumber
+HUMAN_TOWN_HALL = 'I006'
+ORC_STRONGHOLD = 'I007'
 
 
 def picked(game, player):
@@ -40,7 +39,7 @@ def test_races_and_first_wave(game):
     """Settings, a race pick each, and the first wave spawning - the start of every real game."""
     sync(game, 0, 'game-settings:0:0')
     sync(game, 0, f'race-pick:{HUMAN_TOWN_HALL}')
-    sync(game, 1, f'race-pick:{HIGH_ELF_BARRACKS}')
+    sync(game, 1, f'race-pick:{ORC_STRONGHOLD}')
     for player in (0, 1):
         game.wait(f'player {player} to pick', lambda: picked(game, player))
     game.wait_for('the first wave to spawn', lambda b: b['wave'] >= 1 and b['creeps'] > 0, timeout=240)
@@ -66,3 +65,25 @@ def test_unit_orders(game):
     game.wait('the builder to reach its target', lambda: arrived(0))
     if not arrived(1):
         raise TestFailed('the second client has the builder somewhere else')
+
+
+def test_settings_command_and_debug_mode(game):
+    """The host's settings command (-s debug 100) sets Debug mode: no wave counts down on its own,
+    -start starts the current one, and when it is over the game stays on it, with no next wave on
+    the way. A race is picked, since a wave only comes to lanes with one."""
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    first = maul.fresh_beat(game)
+    time.sleep(5)
+    later = maul.fresh_beat(game)
+    if later.get('timer') != 0 or later.get('spawning') is not False:
+        raise TestFailed(f'a wave is on its way in Debug mode: timer {first.get("timer")} then {later.get("timer")}')
+    maul.start_wave(game)
+    wave = later.get('wave')
+    game.wait_for('creeps to come', lambda b: (b.get('creeps') or 0) > 0, timeout=30)
+    game.wait_for('the wave to be over', lambda b: b.get('spawning') is False, timeout=300)
+    time.sleep(5)
+    after = maul.fresh_beat(game)
+    if (after.get('wave'), after.get('timer'), after.get('spawning')) != (wave, 0, False):
+        raise TestFailed(f'after the wave: wave {after.get("wave")} (was {wave}), timer {after.get("timer")}, '
+                         f'spawning {after.get("spawning")}')

@@ -23,4 +23,5 @@ count = 2
 names = ["red", "blue"]
 
 [tests]
-file = "tests.py"
+# The basics first, then every Beginner race and the secondary race (races.py, about 45 minutes)
+file = ["tests.py", "races.py"]
