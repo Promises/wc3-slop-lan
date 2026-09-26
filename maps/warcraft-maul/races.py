@@ -30,7 +30,7 @@ import time
 
 import maul
 from maul import BLUE, CREEPS, RED
-from slop import TestFailed
+from slop import TestFailed, trace
 
 # Behaviour classes a tower must have, or must not have, whatever the registration lists say.
 # (KodoBeast is registered on no tower for now: the Chaos Kodo Beast has no Devour to cast.)
@@ -629,6 +629,146 @@ def test_secondary_race_after_the_first(game):
     except TestFailed as error:
         findings.append(f'stopped: {error}')
     findings.raise_if_any('Shrine of Buffs')
+
+
+# Loot Boxer -----------------------------------------------------------------------------------------
+
+LOOT_BOXER = 'I02D'
+LOOT_BOXER_BUILDER = 'u043'
+# Its boxes, tier 1 to 9. A box of tier 1-3 turns into a random tower of its tier when it is
+# built; one of tier 4 or more stands until it is opened (A0EX, a Channel with the order
+# 'channel'), which costs all the mana the box holds (1 for tier 4, up to 6 for tier 9): it
+# regains 0.01 a second, or more from the loot items made for it. The test fills it instead.
+# Either way the Loot Boxer gets an item for a roll of 1-100.
+LOOT_BOXES = ['u044', 'u045', 'u047', 'u046', 'u048', 'u049', 'u04A', 'u04B', 'u04C']
+LOOT_BOX_OPENED = 4
+# How many of each tier the test builds: 24 rolls in all
+LOOT_BOX_COUNTS = {1: 12, 2: 4, 3: 2, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1}
+# The items a box of each tier can give (LootBoxerHandler.Loot in the map repo)
+LOOT_ITEMS = {1: {'I02F', 'I029', 'I02B'}, 2: {'I02F', 'I029', 'I02B'}, 3: {'I02F', 'I029', 'I02B'},
+              4: {'I02F', 'I029', 'I02B', 'I028'}, 5: {'I02F', 'I029', 'I02B', 'I028'},
+              6: {'I02F', 'I02B', 'I028', 'I02A'}, 7: {'I02F', 'I028', 'I02B', 'I02A', 'I02C'},
+              8: {'I02F', 'I028', 'I02A', 'I02B', 'I02C'}, 9: {'I02F', 'I028', 'I02A', 'I02B', 'I02C'}}
+# Each box stands this far from the next, inside red's lane
+LOOT_BOX_SPACING = 256
+
+
+def loot_box_spots():
+    """Spots for boxes in red's lane, LOOT_BOX_SPACING apart."""
+    min_x, min_y, max_x, max_y = maul.lane_areas()[RED]
+    return [(x, y) for y in range(int(min_y) + LOOT_BOX_SPACING, int(max_y) - LOOT_BOX_SPACING + 1, LOOT_BOX_SPACING)
+            for x in range(int(min_x) + LOOT_BOX_SPACING, int(max_x) - LOOT_BOX_SPACING + 1, LOOT_BOX_SPACING)]
+
+
+def build_loot_boxes(game, plan, findings):
+    """Orders a box of each tier in the plan, each by a builder of its own at a spot of its own;
+    a spot the order is refused at is given up for the next free one. [(tier, spot)] ordered."""
+    spots = loot_box_spots()
+    placed = []
+    for tier in plan:
+        while spots:
+            spot = spots.pop(0)
+            before = len(game.events('order'))
+            builder = game.create(RED, LOOT_BOXER_BUILDER, *spot)[0]['id']
+            game.build(RED, builder, LOOT_BOXES[tier - 1], *spot)
+            lines = []
+
+            def answered():
+                lines[:] = [line for line in game.events('order')[before:] if ' build ' in line]
+                return lines
+            game.wait(f'the tier {tier} box order', answered, 15)
+            if lines[0].endswith('issued'):
+                placed.append((tier, spot))
+                break
+            game.log(f'the tier {tier} box was refused at {spot}; trying the next spot')
+            game.remove(RED, builder)
+        else:
+            findings.append(f'a tier {tier} box was refused at every spot in the lane')
+    return placed
+
+
+def test_loot_boxer(game):
+    """Loot Boxer: every box turns into a tower of the pool (tiers 4-9 once opened), and gives
+    the Loot Boxer an item of its tier's table for a roll of 1-100 (the map logs each roll)."""
+    findings = Findings()
+    maul.start(game)
+    # Random-only: picked directly only because the game is in Debug mode (its Dev tab)
+    boxer = maul.pick(game, RED, LOOT_BOXER)
+    findings.check(boxer['type'] == LOOT_BOXER_BUILDER, f"the pick gave a {boxer['type']}, not {LOOT_BOXER_BUILDER}")
+    game.cmd(RED, f'.gold {GOLD}')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
+
+    def at(units, spot):
+        return next((unit for unit in units if abs(unit['x'] - spot[0]) <= 64 and abs(unit['y'] - spot[1]) <= 64
+                     and unit['type'] != LOOT_BOXER_BUILDER), None)
+
+    plan = [tier for tier, count in LOOT_BOX_COUNTS.items() for _ in range(count)]
+    before = len(game.events('lootbox'))
+    placed = []
+    try:
+        placed = build_loot_boxes(game, plan, findings)
+        # Tiers 1-3 turn into towers when built; the higher boxes are opened once they stand
+        closed = [(tier, spot) for tier, spot in placed if tier >= LOOT_BOX_OPENED]
+        boxes, opened = {}, set()
+        orders_before = len(game.events('order'))
+
+        def open_the_finished():
+            # A box is filled with mana when first seen, and ordered open from the next look on:
+            # in a test run, opening in the same tick as the mana was set was refused, and a tick
+            # later it was not. A refused order is given again on the next look
+            issued = {line.split()[-3] for line in game.events('order')[orders_before:] if line.endswith(' channel issued')}
+            units = game.units(RED)
+            for tier, spot in closed:
+                if spot in opened:
+                    continue
+                if spot in boxes and str(boxes[spot]) in issued:
+                    opened.add(spot)
+                elif spot in boxes:
+                    game.order(RED, boxes[spot], 'channel')
+                else:
+                    box = at(units, spot)
+                    if box is not None and box['type'] == LOOT_BOXES[tier - 1]:
+                        boxes[spot] = box['id']
+                        game.cmd(RED, f'.mana {box["id"]} {tier - LOOT_BOX_OPENED + 1}')
+            return len(opened) == len(closed)
+        game.wait(f'{len(closed)} box(es) of tier {LOOT_BOX_OPENED}-9 to stand, and be opened', open_the_finished, 90)
+        game.wait(f'{len(placed)} box(es) to give loot', lambda: len(game.events('lootbox')[before:]) >= len(placed), 30)
+    except TestFailed as error:
+        findings.append(f'stopped: {error}')
+
+    loot = [trace.parse_fields(line) for line in game.events('lootbox')[before:]]
+    by_tier = {}
+    for entry in loot:
+        by_tier.setdefault(entry.get('tier'), []).append(entry)
+    for tier in LOOT_BOX_COUNTS:
+        count = sum(1 for placed_tier, _ in placed if placed_tier == tier)
+        findings.check(len(by_tier.get(tier, [])) == count,
+                       f'{count} box(es) of tier {tier} gave {len(by_tier.get(tier, []))} item(s)')
+    strays = sorted({str(tier) for tier in by_tier if tier not in LOOT_BOX_COUNTS})
+    findings.check(not strays, f'loot was given for tier(s) {", ".join(strays)}, which no box has')
+    for entry in loot:
+        tier, roll, item = entry.get('tier'), entry.get('roll'), entry.get('item')
+        findings.check(isinstance(roll, int) and 1 <= roll <= 100, f'a tier {tier} box rolled {roll}, not 1-100')
+        findings.check(item in LOOT_ITEMS.get(tier, ()), f'a tier {tier} box gave {item} for a roll of {roll}')
+        if item == 'I02F' and tier >= LOOT_BOX_OPENED:
+            findings.check(entry.get('charges', 0) >= 1, f'a tier {tier} box gave I02F with no charges')
+    rolls = sorted(entry['roll'] for entry in loot if isinstance(entry.get('roll'), int))
+    if rolls:
+        game.log(f'Loot Boxer rolls ({len(rolls)}): {" ".join(map(str, rolls))}')
+        # 24 rolls of 1-100 all on one side of 50 happen once in 8 million
+        findings.check(rolls[0] <= 50 < rolls[-1], f'the rolls ran from {rolls[0]} to {rolls[-1]} only')
+
+    # Every box is gone, and a tower of the pool stands in its place
+    try:
+        units = game.units(RED)
+        for tier, spot in placed:
+            unit = at(units, spot)
+            findings.check(unit is not None and unit['type'] not in LOOT_BOXES,
+                           f'the tier {tier} box at {spot} is '
+                           f'{"gone, with nothing in its place" if unit is None else "still a " + unit["type"]}')
+    except TestFailed as error:
+        findings.append(f'the towers were not looked at: {error}')
+    findings.raise_if_any('Loot Boxer')
 
 
 # Behaviours that need kills, time or a running wave, each on a game of its own ------------------
