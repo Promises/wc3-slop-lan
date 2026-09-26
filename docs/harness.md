@@ -116,6 +116,16 @@ client costs time, not a test. `--fresh` launches the clients again for every te
 | `screenshot(client=0)` | a PNG of that client's window, by window id (needs [yabai](https://github.com/koekeishiya/yabai) to find the window) |
 | `library`, `seat`, `artifacts` | whether the map carries the library; the host's seat (or None); where this run's files go |
 
+### The Windows build (Linux + Wine)
+
+When the game binary is a `.exe`, the harness can't install its page (that build's menus come
+from its packed data). Instead it keeps [slop-activator](../activator/) running (started with the
+same launcher as the games, unless one runs already) and starts `harness/webui/bridge.py` for
+each game: the bridge reads the menus' port and guid from the activator's instance file and plays
+the page's part toward the web UI server, so everything else here works unchanged. Before each
+LAN search the bridge asks the activator for a fresh switch. `PlayOffline` is not sent (it starts
+a Battle.net sign-in on this build). One client for now. See [porting.md](porting.md#3-linux--wine).
+
 ### Players, clients and slots
 
 - **A player** is a 0-based slot: 0 is red, 1 is blue. Named players take the map's human slots

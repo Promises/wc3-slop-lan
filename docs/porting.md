@@ -1,9 +1,9 @@
 # Porting: a new game version, Windows, Linux + Wine
 
-Everything here was worked out and verified on **macOS with Warcraft III 3.0.0.24268** (the
-x86_64 build, running under Rosetta on Apple Silicon). This page is a research plan: what is
-tied to that build and platform, how each piece was found, and how to find it again somewhere
-else.
+Worked out and verified on **macOS with Warcraft III 3.0.0.24268** (the x86_64 build, under
+Rosetta on Apple Silicon), and for the Windows build on **Linux + Wine** (sections 2 and 3).
+This page is what is tied to a build and platform, how each piece was found, and how to find it
+again somewhere else.
 
 - **Verified** marks what was proven on 3.0.0.24268 / macOS.
 - **Lead** marks a reasonable starting point that nobody has tried yet.
@@ -14,7 +14,9 @@ Work through it in order: each step depends on the one before it.
 
 | piece | where | build-specific | platform-specific |
 |---|---|---|---|
-| LAN activation (breakpoint address, UUID, bytes) | `harness/activate.sh` | **yes** | **yes**: lldb/Rosetta, the register used |
+| LAN activation, macOS (breakpoint address, UUID, bytes) | `harness/activate.sh` | **yes** | **yes**: lldb/Rosetta, the register used |
+| LAN activation, Windows build (selector and factory patterns, known builds) | `activator/src/patterns.rs` | **yes** | Windows or Wine |
+| The menus without our page (Windows build) | `activator/`, `harness/webui/bridge.py` | the message names, maybe | Windows or Wine |
 | Map checksum (xoro + `war3map.w3l`) | `host/src/map.rs` | maybe | no |
 | Discovery (product `PX3W`, version 10200, port 16000) | `host/src/discovery.rs` | the version, maybe | no |
 | The join burst (0x59 skins/profile messages) | `host/src/game.rs` | maybe (Flo tracks it) | no |
@@ -144,118 +146,131 @@ something by hand and read the log to learn its messages.
 ./slop test warcraft-maul    # active host, library, hooks
 ```
 
-## 2. Windows
+## 2. The Windows build: slop-activator
 
-**Status: not attempted.** The host and the library are portable; activation, paths and process
-handling are not.
+**Status:** verified on Linux + Wine (section 3) with 3.0.0.24268; real Windows is untested,
+but it runs the same `.exe` against the same Windows calls.
 
-### 2.1 Game, paths, launching
+The Windows build differs from the macOS one in two ways that decide everything here:
 
-- **Game:** `C:\Program Files (x86)\Warcraft III\_retail_\x86_64\Warcraft III.exe` (check your
-  install). The page goes into `_retail_\webui\`. Set both in `configuration.toml` (its Windows lines
-  are there, commented).
-- **Launching:** the flags `-launch`, `-windowmode windowed` and `-nowfpause` are the same.
-  Check that `-editor` still skips the Battle.net login when the game is started directly
-  (lead).
-- **Data folder:** the default is `Documents\Warcraft III` (CustomMapData, Maps, logs); set
-  `data` in `configuration.toml` to it. Each client needs a user folder of its own: two games on
-  one folder break real maps (the second one's map script does not run). On macOS the second
-  client gets one by starting with `HOME` and `CFFIXED_USER_HOME` pointed at `second_home`; on
-  Windows the folder comes from the shell's known folders, not the environment, so that trick
-  does not carry over - a second Windows user, a redirected Documents folder, or a game flag
-  (unknown) are the leads. Under Wine, a second prefix per client does it.
+- **Its code is encrypted on disk.** `.text` has 8.00 bits of entropy per byte; the loader
+  (`war3_loader.dll`) decrypts it page by page as the game runs, and pages not yet run are mapped
+  with no access. Search the *running* game, never the file.
+- **Its menus come from its packed data**, not a `webui` folder: our page cannot be put there.
 
-### 2.2 Activation
+### 2.1 Activation: the provider selector
 
-- **The register.** x64 Windows passes the first argument in `ecx`/`rcx`, not `edi`/`rdi`. The
-  site to look for is `b9 50 4f 4f 4c` (`mov ecx, 'LOOP'`) followed by a `call`, and the
-  breakpoint rewrites `rcx`.
-- **Finding it:** as in 1.2, with **x64dbg** (breakpoints on each candidate, then trigger from
-  the page) or **cdb** from the Windows SDK. cdb is the scriptable one, the counterpart of
-  `lldb --batch`:
-  ```
-  cdb -p <pid> -c "bp /1 <module>+<rva> \"r rcx=0x5443504e; qd\"; g"
-  ```
-  Use module-relative addresses (`Warcraft III+0x...`) because of ASLR; `lm` lists the base.
-- **Watching W3Champions:** find out how W3Champions does it on Windows, with Process Monitor
-  or API Monitor on its helper (`DebugActiveProcess`, `WriteProcessMemory`,
-  `SetThreadContext`).
-- **The script:** port `activate.sh` to Python (ctypes: `DebugActiveProcess`,
-  `WaitForDebugEvent`, a hardware breakpoint via `SetThreadContext` Dr0–Dr3, rewrite `Rcx`,
-  `DebugActiveProcessStop`), or wrap cdb.
-- **Antivirus** may flag a process that debugs another. That is expected; W3Champions has the
-  same problem.
+In the running game (3.0.0.24268) the handler behind `InitializeLocalNetProvider` is
 
-### 2.3 The host
+```
+sub rsp,0x58; call ..; mov ecx,'LOOP'; call ..; call ..; lea rcx,..; mov qword [rsp+0x28],4
+```
 
-- `cargo build` works on Windows as-is for hosting.
-- `inject` refuses on Windows. `replace_file` in `host/src/inject.rs` needs the UTF-16 path that
-  StormLib's Windows API takes; the `stormlib` crate's `Archive::open` shows how
-  (`widestring`).
-- **Discovery:** the host answers on loopback to the searcher's port. Check that Windows
-  delivers the client's broadcast to a socket bound to `0.0.0.0:16000`, with
-  `diagnostics/udp-listen.py`.
+and the provider factory it calls takes `BNET`, `LOOP` and `TCPN` (class `NetProviderLTCP`).
+W3Champions' launcher rewrites exactly this `mov ecx,'LOOP'` (its pattern, an `iced-x86` check of
+the instruction and its `POOL`→`NPCT` operands are in its binary), and so does
+`activator/` (**verified**):
 
-### 2.4 The harness
+1. Find the selector by pattern once its page is decrypted (the handler must have run once;
+   the activator asks the menus for it).
+2. Suspend the game's threads, make sure none is on that instruction, write `TCPN` over `LOOP`,
+   ask for `InitializeLocalNetProvider` (the game builds a TCPN provider and opens its LAN
+   socket), write `LOOP` back at once, flush the instruction cache, resume.
 
-| on macOS | on Windows |
-|---|---|
-| `pgrep -f`, `kill -9` | `psutil`, or `tasklist` / `taskkill /F` |
-| `lsof -ti tcp:<port> -sTCP:LISTEN` | `netstat -ano`, or `psutil.net_connections()` |
-| `harness/activate.sh`, `harness/wc3.sh` (bash) | Python equivalents (wc3.sh is thin: POSTs to the server) |
-| `screencapture -l <window id>` + yabai | `PrintWindow`, or a capture library, by window handle |
+**Keep the patch in for a moment only.** Left in place, the loader notices the changed code and
+shuts the game down within about a minute (exception `0xC00000E5` from `war3_loader.dll`,
+**verified**). Restored after the rebuild, the game ran on with its TCPN provider through several
+LAN games (**verified**). No debugger is attached, and no DLL is injected.
 
-`harness/slop/session.py` holds almost all of this, in `start`, `_client_pid` and `stop`.
-Isolating it behind a small platform module is the clean way in.
+A new build: extend `KNOWN_BUILDS` and the patterns in `activator/src/patterns.rs` once they are
+checked; the activator refuses unknown builds and a pattern that matches more than one place.
 
-## 3. Linux + Wine (or Proton)
+### 2.2 The menus without our page
 
-**Status: not attempted.** The game is the Windows build, so section 2's findings apply inside
-Wine, while the host and harness run natively on Linux.
+The game serves its menus at `http://127.0.0.1:<port>/webui/index.html?guid=<guid>` and talks to
+them over `ws://127.0.0.1:<port>/webui-socket/<guid>`. Anything local may connect and send what
+the page would, `{"type":"webui","message":...,"payload":{...}}`; the game's messages reach every
+connected socket (**verified**). The activator reads port and guid from the game's memory (the
+game writes that URL there) and publishes them in `%TEMP%\slop-activator\<pid>.json`;
+`harness/webui/bridge.py` then plays the page's part toward the harness (check-in, screens,
+`raw`, `lanjoin`, `leave`).
 
-### 3.1 Clients
+Two things differ from the macOS page's flow:
 
-- **A prefix per client:** two games on one user folder break real maps (the second one's map
-  script does not run), so the second client gets a prefix of its own, with its
-  `drive_c/users/<user>/Documents/Warcraft III/Maps/<folder>` linked to the first's:
-  ```sh
-  WINEPREFIX=~/wc3 wine "C:/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe" -launch -windowmode windowed -nowfpause
-  WINEPREFIX=~/wc3-2 wine "C:/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe" -launch -windowmode windowed -nowfpause
-  ```
-  In `configuration.toml`'s `[game]`: `launcher = ["env", "WINEPREFIX=...", "wine"]`, `binary` and
-  `webui` inside the prefix, and `data` at that Documents folder. The harness's `second_home`
-  (a HOME for the second client, which is how macOS moves it) needs a per-client launcher for
-  this - not written yet.
-- **The install:** Battle.net under Wine is the usual way to install it (Lutris has scripts).
-- **Launching directly:** check that `-editor` skips the login when the exe is started directly
-  under Wine (lead).
+- **No `PlayOffline`.** This build reports `enableOfflineMode: false` in its `FeatureFlags`;
+  `PlayOffline` starts a Battle.net sign-in ("Login Queue") that pulls the client out of the LAN
+  game at loading. The local provider works from the login screen without it (**verified**).
+- **No `InitializeNetProvider` before a search** (it too starts a sign-in). A fresh provider for
+  each search is asked of the activator instead: the bridge drops `<pid>.request`, the
+  activator switches again (its switch rebuilds the provider) and counts it in the instance
+  file, and the bridge searches once the count has gone up.
 
-### 3.2 Activation
+`-editor` does not skip the login screen on this build, and is not needed.
 
-The game code is Windows x64 code in a Linux process (the Wine preloader), so:
-- **The register is `rcx`** (Windows calling convention), and the site is the `mov ecx,'LOOP'`
-  pattern from 2.2.
-- **Debugger:** `winedbg --gdb <pid>` gives a gdb that understands the PE modules. Plain `gdb -p`
-  also works if you compute the module base yourself: `Warcraft III.exe`'s mapping in
-  `/proc/<pid>/maps`, plus the RVA. The breakpoint script is then the gdb version of
-  `activate.sh`: `tbreak *<addr>`, `continue`, `set $rcx = 0x5443504e`, `detach`.
-- **ptrace:** it needs `kernel.yama.ptrace_scope` 0 or 1 (with the same user), or root.
+### 2.3 Running it on Windows (untested)
+
+- `slop-activator.exe`: from a release, or `cargo build --release --target
+  x86_64-pc-windows-gnu` in `activator/` (it cross-compiles from macOS or Linux).
+- **The harness** is written for Unix (`pgrep`, `kill`, `setsid`); it has not been run on
+  Windows. The activator alone is enough for LAN play between Windows games and a host.
+- **The host**: `cargo build` works; `inject` refuses on Windows (StormLib's UTF-16 paths,
+  `host/src/inject.rs`).
+- **A second client** needs a user folder of its own (a second Windows user, or a redirected
+  Documents folder); two games on one break real maps.
+
+## 3. Linux + Wine
+
+**Status: verified** on Arch Linux, KDE Plasma (Wayland, Xwayland), a GTX 960M with
+`nvidia-580xx`, wine-staging 11.18, Warcraft III 3.0.0.24268: `slop up` with Warcraft Maul, one
+client, the library's heartbeat and commands (2026-09-26).
+
+### 3.1 The prefix
+
+- **wine-staging 11.6 or newer, not Proton.** Since 3.0 the login fails under Proton 11 ("Please
+  check your VPN"): the new `ClientSdk.dll` hands `CertCreateCertificateChainEngine` an 88-byte
+  config that Proton's Wine rejects; upstream Wine fixed it in 11.6.
+- One 64-bit prefix (`WINEARCH=win64`, `winecfg -v win10`), `winetricks -q dxvk arial`, `nvapi`
+  and `nvapi64` disabled. Run everything with `prime-run` on hybrid-graphics laptops.
+- **Battle.net needs its browser's hardware acceleration off** or it crashes right after login:
+  `"HardwareAcceleration": "false"` under `Client` in
+  `drive_c/users/<user>/AppData/Roaming/Battle.net/Battle.net.config`.
+- Install Warcraft III through Battle.net and start it from there once; after that the harness
+  starts `Warcraft III.exe` itself (`-launch -windowmode windowed -nowfpause`).
+- The system clock must be right (`timedatectl set-ntp true`); W3Champions checks it.
+
+### 3.2 configuration.toml
+
+```toml
+[game]
+binary = "~/Games/wc3/drive_c/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe"
+webui = ""
+data = "~/Games/wc3/drive_c/users/<user>/Documents/Warcraft III"
+args = ["-launch", "-windowmode", "windowed", "-nowfpause"]
+launcher = ["env", "WINEPREFIX=/home/<user>/Games/wc3", "prime-run", "wine"]
+```
+
+The harness sees a Windows build (the binary ends in `.exe`), starts `slop-activator.exe` with
+the same launcher, and a bridge per game. Run `slop` from the desktop session: a game started
+without `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY` exits at once. One client for now (a second needs
+a second prefix; the harness refuses two).
 
 ### 3.3 Network
 
-- **Loopback:** Wine processes share the Linux host's loopback, so the native host,
-  `server.py` on `127.0.0.1:8777` and the page's `fetch` all reach each other (lead: check the
-  page's requests aren't blocked by the embedded browser's policy under Wine).
-- **Discovery:** the client's broadcast to `255.255.255.255:16000` may leave by the default
-  interface rather than `lo`. The host binds `0.0.0.0:16000`, so it should still hear it; check
-  with `diagnostics/udp-listen.py`. If the searches never arrive, the host's fallback (announcing
-  to ports 16000–16003 on loopback) doesn't depend on broadcasts.
+- Wine shares the Linux loopback: host, web UI server, bridge and games all reach each other.
+- The game takes UDP 16000 first; the host then announces to the clients' ports instead
+  ("UDP 16000 is taken ... announcing to the clients' ports", **verified**).
 
-### 3.4 The harness
+### 3.4 Pitfalls
 
-As on Windows for activation. The rest is closer to macOS: `pgrep`/`kill` work (on the Wine
-processes); `lsof` works on the ports; and the second client is `WINEPREFIX` instead of `HOME`.
-Screenshots: `xdotool search --pid` for the window, then `import -window <id>` (ImageMagick).
+- Wine links the prefix's `Documents` to your real `~/Documents`: the harness keeps configured
+  paths as written (not resolved through links), since the activator's folder is found from the
+  data folder's place in the prefix.
+- Over SSH, `pkill -f <pattern>` kills its own shell when the command line holds the pattern;
+  send scripts through `bash -s` on stdin.
+- A process only just started under Wine may not give an exit code yet; the activator checks
+  the process list before calling a game gone.
+- W3Champions under Wine: sign-in often crashes in Wine's `ole32`, and launcher 1.6.8+ refuses
+  to start games (its job-object check); neither matters for slop-lan.
 
 ## Keeping it honest
 

@@ -37,6 +37,11 @@ It works on any map, at three levels:
 
 Battle.net doesn't have to run, and no login is needed: the clients start offline.
 
+**Linux + Wine** (the Windows build, one client for now) works too: wine-staging 11.6+ rather
+than Proton, and [slop-activator](activator/) in place of `lldb` - download it from the releases
+or build it here. Setup and pitfalls: [docs/porting.md](docs/porting.md#3-linux--wine). Real
+Windows is untested.
+
 ## Install
 
 ```sh

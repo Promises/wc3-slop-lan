@@ -72,11 +72,12 @@ map = "any-map"                    # the default map: a folder under maps/
 
 [game]
 binary = "/Applications/Warcraft III/_retail_/x86_64/Warcraft III.app/Contents/MacOS/Warcraft III"
-webui = "/Applications/Warcraft III/_retail_/webui"        # the harness puts its page here
+webui = "/Applications/Warcraft III/_retail_/webui"        # the harness puts its page here (empty for the Windows build)
 data = "~/Library/Application Support/Blizzard/Warcraft III"  # holds Maps and CustomMapData
 second_home = ".slop/client-2"     # the second client's home: its own user folder, Maps linked to yours
 args = ["-editor", "-launch", "-windowmode", "windowed", "-nowfpause"]
 launcher = []                      # put in front of the binary, e.g. ["env", "WINEPREFIX=...", "wine"]
+activator = ""                     # the Windows build: slop-activator.exe (empty: the one built in activator/)
 server = "http://127.0.0.1:8777"   # the web UI server; written into the page when it is installed
 ```
 
