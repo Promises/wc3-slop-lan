@@ -155,7 +155,9 @@ The Windows build differs from the macOS one in two ways that decide everything 
 
 - **Its code is encrypted on disk.** `.text` has 8.00 bits of entropy per byte; the loader
   (`war3_loader.dll`) decrypts it page by page as the game runs, and pages not yet run are mapped
-  with no access. Search the *running* game, never the file.
+  with no access. Search the *running* game, never the file. Decrypted pages do not stay: a
+  page seen once can be unreadable again later (the factory's was, 18 s after a switch that had
+  found it, **verified**), so check for the code each time and run it again to bring it back.
 - **Its menus come from its packed data**, not a `webui` folder: our page cannot be put there.
 
 ### 2.1 Activation: the provider selector
@@ -171,8 +173,9 @@ W3Champions' launcher rewrites exactly this `mov ecx,'LOOP'` (its pattern, an `i
 the instruction and its `POOL`→`NPCT` operands are in its binary), and so does
 `activator/` (**verified**):
 
-1. Find the selector by pattern once its page is decrypted (the handler must have run once;
-   the activator asks the menus for it).
+1. Find the selector and the factory by pattern while their pages are decrypted (the handler
+   must have run lately; when either is missing the activator asks the menus for it, and only a
+   factory still missing after that is refused).
 2. Suspend the game's threads, make sure none is on that instruction, write `TCPN` over `LOOP`,
    ask for `InitializeLocalNetProvider` (the game builds a TCPN provider and opens its LAN
    socket), write `LOOP` back at once, flush the instruction cache, resume.

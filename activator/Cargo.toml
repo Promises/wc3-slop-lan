@@ -2,7 +2,7 @@
 # real LAN provider. See src/main.rs and ../docs/porting.md.
 [package]
 name = "slop-activator"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 

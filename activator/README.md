@@ -24,8 +24,9 @@ Under Wine, run it in the game's prefix: `WINEPREFIX=~/Games/wc3 wine slop-activ
 
 For each game it writes `%TEMP%\slop-activator\<pid>.json` - the port and guid of the game's
 menus, and how many times it has switched it - which is how wc3-slop-lan's harness
-(`harness/webui/bridge.py`) drives a Windows game's menus. Dropping `<pid>.request` there asks for
-a switch now (the harness does before each LAN search, so the search gets a fresh provider).
+(`harness/webui/bridge.py`) drives a Windows game's menus. Dropping `<pid>.request` there, holding
+a token, asks for a switch now; the token comes back as `served` when it is done (the harness does
+this before each LAN search, so the search gets a fresh provider).
 
 Sample log:
 

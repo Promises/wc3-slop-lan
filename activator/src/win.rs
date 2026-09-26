@@ -115,9 +115,11 @@ impl Game {
     }
 
     /// The provider selector (its operand's address, and what it selects now), once the game has
-    /// decrypted it. Refuses when the build's factory does not take TCPN, or the pattern is not
-    /// unique.
-    pub fn selector(&self) -> Result<Option<(usize, [u8; 4])>> {
+    /// decrypted it and the factory it calls. The game takes decrypted pages away again after a
+    /// while, so either may be missing: None then, and running the handler brings them back.
+    /// `ran` says the handler has just run: a selector without its factory then means this
+    /// build's factory does not take TCPN, and that is refused, as is a pattern that is not unique.
+    pub fn selector(&self, ran: bool) -> Result<Option<(usize, [u8; 4])>> {
         let runs = self.readable_runs(self.text.0, self.text.1, false);
         let factory = pattern(FACTORY);
         let mut found = vec![];
@@ -127,8 +129,7 @@ impl Game {
         match found.as_slice() {
             [] => Ok(None),
             [site] if runs.iter().any(|(_, bytes)| !find_all(bytes, &factory).is_empty()) => Ok(Some(*site)),
-            // The selector has run, so the factory it calls has too: if its pattern is not there,
-            // this build's factory is not one that makes TCPN providers
+            [_] if !ran => Ok(None),
             [_] => Err("this build's provider factory does not look like one that makes TCPN providers; refusing".into()),
             sites => Err(format!("the selector pattern matched {} places; refusing to guess", sites.len())),
         }

@@ -17,8 +17,9 @@
 //!    and guid are read from the game's memory. It writes them to
 //!    `%TEMP%\slop-activator\<pid>.json` with a count of its switches so far, so a harness can
 //!    drive that game's menus too (harness/webui/bridge.py). A harness about to search for a LAN
-//!    game drops `<pid>.request` there: the activator switches again (which rebuilds the provider,
-//!    so the search gets a fresh one) and the count goes up.
+//!    game drops `<pid>.request` there, holding a token: the activator switches again (which
+//!    rebuilds the provider, so the search gets a fresh one) and writes the token back as
+//!    `served`.
 //!
 //! It refuses game builds the patterns were not checked on (--any-build to try anyway), and a
 //! selector pattern that matches more than one place.
@@ -115,10 +116,10 @@ mod watch {
         let file = instance_file(pid);
         log!("game {pid}: menus on 127.0.0.1:{port}, guid {guid}");
         let mut menus = Menus::connect(port, &guid).map_err(|e| format!("connecting to its menus: {e}"))?;
-        write_instance(&file, pid, port, &guid, 0);
+        write_instance(&file, pid, port, &guid, 0, "");
         activate(&game, &mut menus)?;
         let mut activations = 1;
-        write_instance(&file, pid, port, &guid, activations);
+        write_instance(&file, pid, port, &guid, activations, "");
         if once {
             return Ok(());
         }
@@ -133,15 +134,24 @@ mod watch {
                 };
                 // Asked for (a harness about to search: a switch rebuilds the provider, so the search
                 // gets a fresh TCPN one), or seen falling back to LOOP
-                let asked = std::fs::remove_file(request_file(pid)).is_ok();
+                // The request's token is echoed as "served" once its switch is done, so the harness
+                // can tell its own switch from one that happened to finish meanwhile
+                let request = request_file(pid);
+                let asked = std::fs::read_to_string(&request).ok().filter(|_| std::fs::remove_file(&request).is_ok());
                 let fell_back = message.is_some_and(|m| {
                     m["messageType"] == "OnNetProviderChanged" && m["payload"]["providerId"] == "LOOP"
                 });
-                if asked || (fell_back && Instant::now() > quiet_until) {
-                    log!("game {pid}: {}", if asked { "switch asked for" } else { "back on LOOP" });
-                    activate(&game, &mut menus)?;
-                    activations += 1;
-                    write_instance(&file, pid, port, &guid, activations);
+                if asked.is_some() || (fell_back && Instant::now() > quiet_until) {
+                    log!("game {pid}: {}", if asked.is_some() { "switch asked for" } else { "back on LOOP" });
+                    // A failed switch is logged and the watch goes on: the game is still there,
+                    // and whoever asked sees no "served" and carries on without it
+                    match activate(&game, &mut menus) {
+                        Ok(()) => {
+                            activations += 1;
+                            write_instance(&file, pid, port, &guid, activations, asked.as_deref().unwrap_or("").trim());
+                        }
+                        Err(error) => log!("game {pid}: the switch failed: {error}"),
+                    }
                     quiet_until = Instant::now() + Duration::from_secs(3);
                 }
             }
@@ -162,12 +172,12 @@ mod watch {
                 Err(e) => Err(format!("its menus went away: {e}")),
             }
         };
-        let (operand, current) = match game.selector()? {
+        let (operand, current) = match game.selector(false)? {
             Some(site) => site,
             None => {
-                // Not decrypted yet: running the handler once brings its page in
+                // Not decrypted (yet, or no longer): running the handler once brings its pages in
                 rebuild(menus)?;
-                wait(game, Duration::from_secs(10), || game.selector()).map_err(|e| {
+                wait(game, Duration::from_secs(10), || game.selector(true)).map_err(|e| {
                     format!("the provider selector never showed up after a provider rebuild ({e}; a build the pattern does not fit?)")
                 })?
             }
@@ -212,9 +222,9 @@ mod watch {
     }
 
     /// What a harness needs to drive this game's menus; `activations` counts the switches to TCPN,
-    /// so it can wait for the one after a provider rebuild it asked for.
-    fn write_instance(file: &PathBuf, pid: u32, port: u16, guid: &str, activations: u32) {
-        let body = serde_json::json!({"pid": pid, "port": port, "guid": guid, "activations": activations});
+    /// and `served` is the token of the last request a switch answered.
+    fn write_instance(file: &PathBuf, pid: u32, port: u16, guid: &str, activations: u32, served: &str) {
+        let body = serde_json::json!({"pid": pid, "port": port, "guid": guid, "activations": activations, "served": served});
         // Whole or not at all: a reader never sees half a file
         let temporary = file.with_extension("json.part");
         let written = std::fs::create_dir_all(file.parent().unwrap())
