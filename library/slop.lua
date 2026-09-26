@@ -12,9 +12,9 @@ by `if Slop then ... end`, and costs nothing when it is absent. See docs/library
        heartbeat each second, the events the map notes, and what commands did. Every client
        writes the same lines while they agree.
 
-Every file carries the local player's slot in its name, so clients that share a data folder
-(two games on one machine) keep apart. File names are local to each client; only what goes
-into the files has to be the same everywhere.
+Every file carries the local player's slot in its name, so two clients' files are easy to tell
+apart (each needs a user folder of its own anyway: two games on one break real maps). File names
+are local to each client; only what goes into the files has to be the same everywhere.
 
 Everything here must run the same on every client: no GetLocalPlayer, no wall clock, no UI.
 ]]
@@ -146,7 +146,9 @@ do
             if isPlayer(index) then
                 local p = Player(index)
                 local fields = {'g=' .. GetPlayerState(p, PLAYER_STATE_RESOURCE_GOLD),
-                                'l=' .. GetPlayerState(p, PLAYER_STATE_RESOURCE_LUMBER)}
+                                'l=' .. GetPlayerState(p, PLAYER_STATE_RESOURCE_LUMBER),
+                                'fu=' .. GetPlayerState(p, PLAYER_STATE_RESOURCE_FOOD_USED),
+                                'fc=' .. GetPlayerState(p, PLAYER_STATE_RESOURCE_FOOD_CAP)}
                 for _, hook in ipairs(playerHooks) do
                     fields[#fields + 1] = safely('player hook', hook, index)
                 end
@@ -174,14 +176,37 @@ do
         return group
     end
 
-    local function findUnit(group, handleId)
-        local match
-        eachUnit(group, function(u)
-            if GetHandleId(u) == handleId then
-                match = u
-            end
-        end)
-        return match
+    -- Units are named by ref, not handle id. A handle id is local: clients hand them out and
+    -- reuse them differently (local-only objects such as UI frames take ids on one client and
+    -- not the other), so the same unit can have a different id on each client, and a command
+    -- naming a handle id reaches a different unit, or none, on the other. Refs are handed out in
+    -- the order units first appear in commands and events, which every client runs alike.
+    -- Keyed by the unit itself, as Lua maps do: a unit is one Lua object while anything holds
+    -- it, and these tables hold every unit given a ref
+    local refs, byRef, nextRef = {}, {}, 0
+
+    --- The unit's ref: the same number on every client.
+    function Slop.ref(u)
+        local ref = refs[u]
+        if ref == nil then
+            nextRef = nextRef + 1
+            ref = nextRef
+            refs[u] = ref
+            byRef[ref] = u
+        end
+        return ref
+    end
+
+    --- The unit with that ref, if it still exists; with an owner given, only that player's.
+    local function unitByRef(ref, owner)
+        local u = byRef[tonumber(ref) or -1]
+        if u == nil or GetUnitTypeId(u) == 0 then
+            return nil
+        end
+        if owner ~= nil and GetPlayerId(GetOwningPlayer(u)) ~= owner then
+            return nil
+        end
+        return u
     end
 
     local builtins = {}
@@ -190,7 +215,7 @@ do
     builtins['.units'] = function(index)
         eachUnit(unitsOf(index), function(u)
             local order = GetUnitCurrentOrder(u)
-            Slop.note('unit', string.format('p%d id=%d type=%s at=%d,%d life=%d order=%s', index, GetHandleId(u),
+            Slop.note('unit', string.format('p%d id=%d type=%s at=%d,%d life=%d order=%s', index, Slop.ref(u),
                 decodeFourcc(GetUnitTypeId(u)), math.floor(GetUnitX(u)), math.floor(GetUnitY(u)),
                 math.floor(GetWidgetLife(u)), OrderId2String(order) or tostring(order)))
         end)
@@ -199,16 +224,14 @@ do
 
     -- .order <unit> <order> [x y | target]: an order to one of the player's own units
     builtins['.order'] = function(index, words)
-        local u = findUnit(unitsOf(index), tonumber(words[2]))
+        local u = unitByRef(words[2], index)
         local name = words[3]
         local ok = false
         if u and name then
             if #words >= 5 then
                 ok = IssuePointOrder(u, name, tonumber(words[4]), tonumber(words[5]))
             elseif #words == 4 then
-                local all = CreateGroup()
-                GroupEnumUnitsInRect(all, GetPlayableMapRect(), nil)
-                local target = findUnit(all, tonumber(words[4]))
+                local target = unitByRef(words[4])
                 ok = target ~= nil and IssueTargetOrder(u, name, target)
             else
                 ok = IssueImmediateOrder(u, name)
@@ -219,7 +242,7 @@ do
 
     -- .build <builder> <type> <x> <y>: a build order, the type as its four letters
     builtins['.build'] = function(index, words)
-        local u = findUnit(unitsOf(index), tonumber(words[2]))
+        local u = unitByRef(words[2], index)
         local ok = u ~= nil and words[3] ~= nil and #words[3] == 4 and #words >= 5
             and IssueBuildOrderById(u, fourcc(words[3]), tonumber(words[4]), tonumber(words[5]))
         Slop.note('order', 'p' .. index .. ' build ' .. table.concat(words, ' ', 3) .. (ok and ' issued' or ' rejected'))
@@ -233,6 +256,185 @@ do
     builtins['.lumber'] = function(index, words)
         SetPlayerState(Player(index), PLAYER_STATE_RESOURCE_LUMBER, math.tointeger(tonumber(words[2]) or 0) or 0)
         Slop.note('order', 'p' .. index .. ' lumber ' .. tostring(words[2]))
+    end
+
+    -- .create <type> <x> <y> [count] [life=<n>] [frozen|rooted]: units of that type for the
+    -- player, e.g. creeps for a test to point towers at, run as the creep player; one 'created'
+    -- line each. Life and the rest are set in the same step, before any tower can shoot at them.
+    -- frozen pauses a unit; rooted only stops it moving, and it stays an ordinary unit (some
+    -- attacks, Burning Oil's among them, ignore paused units)
+    builtins['.create'] = function(index, words)
+        local count = math.max(1, math.tointeger(tonumber(words[5]) or 1) or 1)
+        local life, frozen, rooted
+        for i = 6, #words do
+            life = life or math.tointeger(tonumber(words[i]:match('^life=(%d+)$') or ''))
+            frozen = frozen or words[i] == 'frozen'
+            rooted = rooted or words[i] == 'rooted'
+        end
+        for _ = 1, count do
+            local u = CreateUnit(Player(index), fourcc(words[2]), tonumber(words[3]), tonumber(words[4]), 270)
+            if u and life then
+                BlzSetUnitMaxHP(u, life)
+                SetWidgetLife(u, life)
+            end
+            if u and frozen then
+                PauseUnit(u, true)
+            end
+            if u and rooted then
+                SetUnitMoveSpeed(u, 0)
+                SetUnitPropWindow(u, 0)
+            end
+            Slop.note('created', string.format('p%d id=%d type=%s at=%d,%d', index, u and Slop.ref(u) or 0,
+                words[2], math.floor(tonumber(words[3])), math.floor(tonumber(words[4]))))
+        end
+    end
+
+    -- .inspect <unit> [ability or buff ...]: what a unit is right now, any owner: its attack
+    -- (base damage, dice, cooldown, range), armour, speed, life, mana, and the level of each
+    -- ability or buff named (0 when it has none)
+    builtins['.inspect'] = function(index, words)
+        local u = unitByRef(words[2])
+        if not u then
+            Slop.note('inspect', 'id=' .. tostring(words[2]) .. ' missing')
+            return
+        end
+        local order = GetUnitCurrentOrder(u)
+        local parts = {string.format('id=%d type=%s owner=p%d at=%d,%d order=%s life=%d/%d mana=%d dmg=%d+%dd%d cd=%.2f range=%d armor=%d speed=%d',
+            Slop.ref(u), decodeFourcc(GetUnitTypeId(u)), GetPlayerId(GetOwningPlayer(u)),
+            math.floor(GetUnitX(u)), math.floor(GetUnitY(u)), OrderId2String(order) or tostring(order),
+            math.floor(GetWidgetLife(u)), BlzGetUnitMaxHP(u), math.floor(GetUnitState(u, UNIT_STATE_MANA)),
+            BlzGetUnitBaseDamage(u, 0), BlzGetUnitDiceNumber(u, 0), BlzGetUnitDiceSides(u, 0),
+            BlzGetUnitAttackCooldown(u, 0), math.floor(BlzGetUnitWeaponRealField(u, UNIT_WEAPON_RF_ATTACK_RANGE, 0)),
+            math.floor(BlzGetUnitArmor(u)), math.floor(GetUnitMoveSpeed(u)))}
+        for i = 3, #words do
+            parts[#parts + 1] = words[i] .. '=' .. GetUnitAbilityLevel(u, fourcc(words[i]))
+        end
+        Slop.note('inspect', table.concat(parts, ' '))
+    end
+
+    -- .watch: every hit on this player's units goes into the trace as a 'hit' line: source,
+    -- target, amount, the amount before armor (raw), attack type, and whether it was an attack
+    -- or a spell
+    local attackTypes
+    local watching = {}
+    builtins['.watch'] = function(index)
+        if watching[index] then
+            return
+        end
+        watching[index] = true
+        -- Named as the object editor names them; compared with ==, since the game may not hand
+        -- back the very same object for the same attack type
+        attackTypes = attackTypes or {
+            {ATTACK_TYPE_MELEE, 'normal'}, {ATTACK_TYPE_PIERCE, 'pierce'}, {ATTACK_TYPE_SIEGE, 'siege'},
+            {ATTACK_TYPE_MAGIC, 'magic'}, {ATTACK_TYPE_CHAOS, 'chaos'}, {ATTACK_TYPE_HERO, 'hero'},
+            {ATTACK_TYPE_NORMAL, 'spells'},
+        }
+        -- The amount before armor, from the damaging event that comes first: registered after
+        -- the map's own damage triggers, it is what the map made of the hit, before the target's
+        -- armor and armor type had their say
+        local raw = {}
+        local before = CreateTrigger()
+        TriggerRegisterPlayerUnitEvent(before, Player(index), EVENT_PLAYER_UNIT_DAMAGING, nil)
+        TriggerAddAction(before, function()
+            raw[BlzGetEventDamageTarget()] = GetEventDamage()
+        end)
+        local trigger = CreateTrigger()
+        TriggerRegisterPlayerUnitEvent(trigger, Player(index), EVENT_PLAYER_UNIT_DAMAGED, nil)
+        TriggerAddAction(trigger, function()
+            local source, target = GetEventDamageSource(), BlzGetEventDamageTarget()
+            local amount = raw[target] or GetEventDamage()
+            raw[target] = nil
+            local attackType, name = BlzGetEventAttackType(), '?'
+            for _, known in ipairs(attackTypes) do
+                if known[1] == attackType then
+                    name = known[2]
+                end
+            end
+            Slop.note('hit', string.format('src=%d srctype=%s dst=%d amount=%d raw=%d atk=%s attack=%s',
+                source and Slop.ref(source) or 0, source and decodeFourcc(GetUnitTypeId(source)) or '----',
+                target and Slop.ref(target) or 0, math.floor(GetEventDamage()), math.floor(amount),
+                name, tostring(BlzGetEventIsAttack())))
+        end)
+        Slop.note('order', 'p' .. index .. ' watching hits')
+    end
+
+    -- .casts: from now on, every spell a unit of this player casts goes into the trace as a
+    -- 'cast' line: caster, ability, and the unit it targets (0 for none)
+    local castWatching = {}
+    builtins['.casts'] = function(index)
+        if castWatching[index] then
+            return
+        end
+        castWatching[index] = true
+        local trigger = CreateTrigger()
+        TriggerRegisterPlayerUnitEvent(trigger, Player(index), EVENT_PLAYER_UNIT_SPELL_EFFECT, nil)
+        TriggerAddAction(trigger, function()
+            local caster, target = GetTriggerUnit(), GetSpellTargetUnit()
+            Slop.note('cast', string.format('src=%d srctype=%s ability=%s dst=%d',
+                Slop.ref(caster), decodeFourcc(GetUnitTypeId(caster)), decodeFourcc(GetSpellAbilityId()),
+                target and Slop.ref(target) or 0))
+        end)
+        Slop.note('order', 'p' .. index .. ' watching casts')
+    end
+
+    -- .hp <unit> <life>: sets one of the player's units' maximum and current life
+    builtins['.hp'] = function(index, words)
+        local u = unitByRef(words[2], index)
+        local life = math.tointeger(tonumber(words[3]) or 0) or 0
+        if u and life > 0 then
+            BlzSetUnitMaxHP(u, life)
+            SetWidgetLife(u, life)
+        end
+        Slop.note('order', 'p' .. index .. ' hp ' .. tostring(words[2]) .. ' ' .. life .. (u and ' set' or ' rejected'))
+    end
+
+    -- .upgrade <unit> <type>: upgrades one of the player's buildings to that type (the
+    -- upgrade's cost is charged as for a player)
+    builtins['.upgrade'] = function(index, words)
+        local u = unitByRef(words[2], index)
+        local ok = u ~= nil and words[3] ~= nil and #words[3] == 4 and IssueImmediateOrderById(u, fourcc(words[3]))
+        Slop.note('order', 'p' .. index .. ' upgrade ' .. tostring(words[2]) .. ' ' .. tostring(words[3])
+            .. (ok and ' issued' or ' rejected'))
+    end
+
+    -- .foodcap <n>: sets the player's food cap
+    builtins['.foodcap'] = function(index, words)
+        SetPlayerState(Player(index), PLAYER_STATE_RESOURCE_FOOD_CAP, math.tointeger(tonumber(words[2]) or 0) or 0)
+        Slop.note('order', 'p' .. index .. ' foodcap ' .. tostring(words[2]))
+    end
+
+    -- .freeze <unit>: pauses one of the player's units where it stands; it can still be hit
+    builtins['.freeze'] = function(index, words)
+        local u = unitByRef(words[2], index)
+        if u then
+            PauseUnit(u, true)
+        end
+        Slop.note('order', 'p' .. index .. ' freeze ' .. tostring(words[2]) .. (u and ' done' or ' rejected'))
+    end
+
+    -- .kill <unit>: kills one of the player's units
+    builtins['.kill'] = function(index, words)
+        local u = unitByRef(words[2], index)
+        if u then
+            KillUnit(u)
+        end
+        Slop.note('order', 'p' .. index .. ' kill ' .. tostring(words[2]) .. (u and ' done' or ' rejected'))
+    end
+
+    -- .remove <unit>: takes one of the player's units out of the game, with no death (nothing
+    -- dies, so nothing reacts to a death)
+    builtins['.remove'] = function(index, words)
+        local u = unitByRef(words[2], index)
+        if u then
+            RemoveUnit(u)
+        end
+        Slop.note('order', 'p' .. index .. ' remove ' .. tostring(words[2]) .. (u and ' done' or ' rejected'))
+    end
+
+    -- .tech <tech> <level>: researches an upgrade for the player to that level
+    builtins['.tech'] = function(index, words)
+        SetPlayerTechResearched(Player(index), fourcc(words[2]), math.tointeger(tonumber(words[3]) or 1) or 1)
+        Slop.note('order', 'p' .. index .. ' tech ' .. tostring(words[2]) .. ' ' .. tostring(words[3] or 1))
     end
 
     -- .end: ends the game for everyone, to the score screen. Every client runs this from the

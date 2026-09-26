@@ -24,8 +24,13 @@ declare interface SlopLibrary {
     urgent(this: void, ...categories: string[]): void;
     /** Writes what was noted since the last flush. */
     flush(this: void): void;
-    /** How many handles this client has made; drifts apart when clients diverge. */
+    /** Roughly how many handles this client has made: a hint when hunting a desync, not proof of one. */
     handleMark(this: void): number;
+    /**
+     * A unit's ref: how the library names units, the same number on every client (handle ids
+     * are not). Use it to name units in notes.
+     */
+    ref(this: void, unit: unit): number;
 
     /** Takes a command line for a player (0-based slot); return true when it was handled. */
     onCommand(this: void, hook: (this: void, player: number, line: string) => boolean): void;

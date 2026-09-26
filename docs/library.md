@@ -21,7 +21,8 @@
     game). `slop file` writes these files.
 - **One way out: the trace.** Numbered chunks `slop-trace-p<slot>-NNNN.txt` in CustomMapData,
   flushed every second. Every file the library writes or reads carries the slot of the player
-  that client plays, so two clients can share a data folder. The file names differ between
+  that client plays, so the clients' files are easy to tell apart (each client still needs a
+  user folder of its own: two games on one break real maps). The file names differ between
   clients by design; what's in the files doesn't. Categories marked urgent are flushed at once, because a
   desync drops the client within the second.
 
@@ -44,8 +45,8 @@ Every second the library writes a heartbeat. Here is one, with Warcraft Maul's h
 812 t300 h53120 beat handles=53120 cmdpoll=61 lives=100 wave=2 p0(g=500 l=0 k=12 t=4) p1(g=250 l=0 k=9 t=3)
 ```
 
-Each playing human (not the seat) gets a `p<slot>(...)` part, with gold (`g`) and lumber (`l`)
-plus whatever the map's hooks add.
+Each playing human (not the seat) gets a `p<slot>(...)` part: gold (`g`), lumber (`l`), food
+used and food cap (`fu`, `fc`), plus whatever the map's hooks add.
 
 ## Built-in commands
 
@@ -54,17 +55,32 @@ They start with a dot, so they can't clash with a map's own chat commands.
 | | |
 |---|---|
 | `.units` | the player's units into the trace: `unit p0 id=1049 type=h000 at=512,-256 life=420 order=move`, then `unit p0 end` |
-| `.order <unit> <order>` | an immediate order (`stop`, `holdposition`) to one of the player's own units, by handle id |
+| `.order <unit> <order>` | an immediate order (`stop`, `holdposition`) to one of the player's own units, by its ref (`Slop.ref`: the same on every client, unlike a handle id) |
 | `.order <unit> <order> <x> <y>` | a point order (`move`, `attack`, `patrol`) |
-| `.order <unit> <order> <target>` | a target order at another unit, by handle id |
+| `.order <unit> <order> <target>` | a target order at another unit, by its ref |
 | `.build <builder> <type> <x> <y>` | a build order; the type as its four letters |
-| `.gold <n>`, `.lumber <n>` | set the player's resources |
+| `.gold <n>`, `.lumber <n>`, `.foodcap <n>` | set the player's resources, or food cap |
+| `.create <type> <x> <y> [count] [life=<n>] [frozen] [rooted]` | units of that type for the player (a creep player, say): `created p13 id=… type=… at=x,y`; with their life set, and paused (`frozen`) or unable to move while still acting (`rooted`), from the moment they exist |
+| `.inspect <unit> [ability …]` | any unit as it is now: `inspect id=… type=… owner=p13 at=x,y order=attack life=…/… mana=… dmg=59+1d2 cd=1.50 range=800 armor=2 speed=0`, plus the level of each ability or buff named |
+| `.watch` | from now on, every hit on the player's units: `hit src=… srctype=… dst=… amount=… raw=… atk=pierce attack=true`; `raw` is the amount before the target's armor (as the map's own damage triggers left it) |
+| `.casts` | from now on, every spell the player's units cast: `cast src=… srctype=… ability=A03D dst=…` (dst 0 for no unit) |
+| `.hp <unit> <life>` | sets one of the player's units' life, maximum included |
+| `.freeze <unit>` | pauses one of the player's units where it stands; it can still be hit (a target that stays put) |
+| `.upgrade <unit> <type>` | upgrades one of the player's buildings |
+| `.kill <unit>` | kills one of the player's units |
+| `.remove <unit>` | takes one of the player's units out of the game, without a death |
+| `.tech <tech> <level>` | researches a tech for the player |
 | `.end` | ends the game for everyone, to the score screen: every client runs it from the same sync event. The harness uses it to reuse the clients for the next test |
 
 - **Results** go to the trace, in the category `order`, as `... issued` or `... rejected`.
 - **Own units only:** a player can only order their own units, as with a real selection.
-- **Handle ids** are the same on every client of one game, so an id from `.units` works for
-  `.order`.
+- **Units are named by ref, not handle id.** A ref is the library's own number for a unit, handed
+  out in the order units first appear in its commands and events. That order is the same on every
+  client, so a ref names the same unit everywhere: an id from `.units` works for `.order`.
+  Handle ids don't: clients hand them out and reuse them differently (local-only objects such as UI
+  frames take ids on one client and not the other). A command naming a handle id can reach a
+  different unit, or none, on the other client, which desyncs the game. Maps name units in their
+  own notes with `Slop.ref(unit)` for the same reason.
 - **Anything else** goes to the map's hooks. If no hook takes the line, it is noted as
   `slop p0 unhandled`.
 
@@ -88,7 +104,8 @@ if Slop then
 end
 ```
 
-Anywhere in the map's code, `Slop.note(category, text)` writes an event to the trace.
+Anywhere in the map's code, `Slop.note(category, text)` writes an event to the trace; name a unit
+in it with `Slop.ref(unit)`, never its handle id.
 
 Register hooks during the map's start-up (in `main` or anything it calls). The library is
 defined before any of it runs, and starts right after the map's own `main` body. In a w3ts map
