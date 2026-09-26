@@ -24,6 +24,7 @@ A failing race lists everything that is wrong with it, not just the first thing.
 The secondary race (Shrine of Buffs, the only one so far) is only for a player who has a race,
 and costs a pick's lumber like any other.
 """
+import math
 import re
 import time
 
@@ -45,8 +46,11 @@ CASTS_ITSELF = {'Berserker', 'FleshGolem', 'DraeneiSeer', 'SalamanderLord', 'Aka
 DUMMY_CASTS = {'OgreWarrior': 'A029', 'OgreMagi': 'A036', 'ForestTrollHighPriest': 'A03P'}
 # - a dummy casts this ability by chance (per attack), so it is only judged after enough attacks;
 DUMMY_CASTS_BY_CHANCE = {'WarchiefThrall': ('A03J', 0.05), 'Magtheridon': ('A0DT', 0.15)}
-# - it makes units of this type (serpent wards).
+# - it makes units of this type (serpent wards);
 MAKES_UNITS = {'Rokhan': 'o00H'}
+# - it attacks random enemies in range: it gets this many targets in an arc in front of it, and
+#   must spread its hits over them (one it stayed on, or the nearest one, would get nearly all)
+RANDOM_TARGET, RANDOM_TARGETS = {'VenomTower'}, 8
 # Not checked while attacking: kills (RockGiant, SeaGiant), time (AncientGolem), a wave running
 # (IronGolemStatue, CorruptedAncientProtector) or research (CorruptedTreeofLife) - separate tests
 
@@ -268,6 +272,12 @@ class Slot:
     def target_spot(self, distance):
         return self.spot[0], self.spot[1] + self.side * distance
 
+    def arc_spots(self, distance, count):
+        """`count` spots `distance` from the tower, in a half circle on its targets' side."""
+        angles = [math.pi * (i + 1) / (count + 1) for i in range(count)]
+        return [(round(self.spot[0] + distance * math.cos(a)), round(self.spot[1] + self.side * distance * math.sin(a)))
+                for a in angles]
+
 
 def homesick(race, chain):
     by_id = towers_by_id(race)
@@ -366,7 +376,11 @@ def look_at(game, race, looking, classes, findings, state):
     tower of the race next to a friendly aura), a while to attack, then what they did."""
     by_id = towers_by_id(race)
     neighbour = neighbour_type(race)
-    targets, neighbours = {}, {}
+    # Casts are judged from here: a tower casts on its first attack, which can come as soon as its
+    # target stands (while the other targets and neighbours are still being made), and a spell
+    # with a cooldown does not come again in the round. Earlier rounds' casts are other towers'.
+    casts_before = len(game.casts())
+    targets, neighbours, spread = {}, {}, {}
     for slot in looking:
         data = by_id[slot.form]
         attack = data['attacks']
@@ -374,8 +388,14 @@ def look_at(game, race, looking, classes, findings, state):
         if attack or enemy_areas:
             distance = min([TARGET_DISTANCE, *(area * 3 // 4 for area in enemy_areas)])
             air_only = attack and 'air' in attack['targets'] and 'ground' not in attack['targets']
-            targets[slot] = game.create(CREEPS, maul.AIR_TARGET if air_only else maul.GROUND_TARGET,
-                                        *slot.target_spot(distance), life=maul.TARGET_LIFE, rooted=True)[0]['id']
+            kind = maul.AIR_TARGET if air_only else maul.GROUND_TARGET
+            if attack and classes.get(slot.tower, {}).get('class') in RANDOM_TARGET:
+                spread[slot] = [game.create(CREEPS, kind, *spot, life=maul.TARGET_LIFE, rooted=True)[0]['id']
+                                for spot in slot.arc_spots(distance, RANDOM_TARGETS)]
+                targets[slot] = spread[slot][0]
+            else:
+                targets[slot] = game.create(CREEPS, kind, *slot.target_spot(distance), life=maul.TARGET_LIFE,
+                                            rooted=True)[0]['id']
         if neighbour and any(reaches_friends(aura) for aura in data['auras']):
             spot = (slot.spot[0] + NEIGHBOUR_DISTANCE, slot.spot[1])
             tower = together(build_step(game, race, slot.player, [neighbour], 0, spot, None, findings, state))[0]
@@ -383,16 +403,20 @@ def look_at(game, race, looking, classes, findings, state):
                 neighbours[slot] = tower
 
     attackers = [slot for slot in looking if by_id[slot.form]['attacks']]
-    # Dummy casts are judged by this round's alone: a cast from an earlier round is another tower's
-    casts_before = len(game.casts())
+    by_key = {(slot.tower, slot.form): slot for slot in looking}
     started = time.time()
     while time.time() - started < ROUND_SECONDS:
-        counts = {}
+        counts, spread_counts = {}, {}
         for hit in game.hits():
             key = (hit['src'], hit['srctype'])
             counts[key] = counts.get(key, 0) + 1
+            if hit['dst'] in spread.get(by_key.get(key), ()):
+                spread_counts[key] = spread_counts.get(key, 0) + 1
+        # A tower that attacks at random also shoots the other towers' targets in its range: it
+        # attacks until it hit its own ones often enough to see the spread
         if time.time() - started >= ROUND_AT_LEAST \
-                and all(counts.get((s.tower, s.form), 0) >= WANTED_HITS for s in attackers):
+                and all(counts.get((s.tower, s.form), 0) >= WANTED_HITS for s in attackers) \
+                and all(spread_counts.get((s.tower, s.form), 0) >= 3 * len(around) for s, around in spread.items()):
             break
         time.sleep(1)
 
@@ -403,7 +427,9 @@ def look_at(game, race, looking, classes, findings, state):
     for slot in looking:
         check_auras(game, by_id, slot, targets, neighbours, looking, findings)
     check_behaviours(game, race, attackers, classes, casts[casts_before:], findings)
-    for target in targets.values():
+    for slot, around in spread.items():
+        check_spread(by_id[slot.form], slot.tower, around, hits, findings)
+    for target in {*targets.values(), *(t for around in spread.values() for t in around)}:
         game.remove(CREEPS, target)
     for slot, tower in neighbours.items():
         maul.sell(game, slot.player, [tower])
@@ -439,7 +465,8 @@ def check_attack(game, data, tower, target, cls, hits, casts, findings):
                             f'range={now.get("range")}')
         return
     raws = [hit['raw'] for hit in attacks if hit['atk'] == attack['type'] and 'raw' in hit]
-    if not raws:
+    if not raws or attack['damageMax'] < attack['damageMin']:
+        # A range the object data cannot mean (Ogre Magi's 1-0): its damage comes from elsewhere
         return
     says = f'its attack says {attack["damageMin"]}-{attack["damageMax"]}'
     findings.check(min(raws) >= attack['damageMin'] - 1,
@@ -447,6 +474,22 @@ def check_attack(game, data, tower, target, cls, hits, casts, findings):
     if not (set(data['abilityBases']) & RAISES_DAMAGE or cls in GROWS):
         findings.check(max(raws) <= attack['damageMax'] + 1,
                        f'{named(data)} hit for as much as {max(raws)} before armor, {says}')
+
+
+def check_spread(data, tower, around, hits, findings):
+    """A tower that attacks a random enemy spread its attacks over the targets around it."""
+    on = {}
+    for hit in by_form(hits, tower, data['id']):
+        if hit['attack'] == 'true' and hit['dst'] in around:
+            on[hit['dst']] = on.get(hit['dst'], 0) + 1
+    attacks = sum(on.values())
+    # 24 random picks of 8 miss 3 or more of them about once in 1400 rounds
+    if attacks < 3 * len(around):
+        findings.append(f'{named(data)} hit its {len(around)} targets only {attacks} times, too few to see a spread')
+        return
+    findings.check(len(on) > len(around) - 3 and max(on.values()) <= attacks // 2,
+                   f'{named(data)} does not pick its targets at random: {attacks} attacks on '
+                   f'{len(on)} of {len(around)} targets, at most {max(on.values())} on one')
 
 
 def check_auras(game, by_id, slot, targets, neighbours, looking, findings):
