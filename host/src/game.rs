@@ -57,7 +57,12 @@ enum Phase {
 
 struct Player {
     pid: u8,
+    /// The configured name: a label to match a joining client by and to show in status
     name: String,
+    /// The name the client joined with, which is what the game knows the player by. Every client
+    /// must be told the same one: a map may compute with names (Warcraft Maul reads red's name
+    /// at start-up), and clients that disagree on it disagree on the game from there.
+    joined_as: String,
     conn: Option<u32>,
     map_ok: bool,
     skins: bool,
@@ -88,6 +93,7 @@ impl Game {
         let players = names.iter().zip(&slots.player_ids).map(|(name, pid)| Player {
             pid: *pid,
             name: name.clone(),
+            joined_as: String::new(),
             conn: None,
             map_ok: false,
             skins: false,
@@ -159,11 +165,13 @@ impl Game {
         }
     }
 
-    /// The one burst a client gets for its ReqJoin, as Flo sends it: its slot and the table,
-    /// every other player's info and skins, everyone's profile, and the map to check.
+    /// The one burst a client gets for its ReqJoin, as Flo sends it: its slot and the table, the
+    /// info and skins of every player already in (and the seat), their profiles and its own, and
+    /// the map to check. Players who join later are announced to it when they do (announce).
     fn welcome(&self, pid: u8, local: SocketAddr) -> Result<Vec<Packet>> {
         let SocketAddr::V4(local) = local else { return Err("ipv6".into()) };
-        let others: Vec<(u8, &str)> = self.players.iter().filter(|p| p.pid != pid).map(|p| (p.pid, p.name.as_str()))
+        let others: Vec<(u8, &str)> = self.players.iter().filter(|p| p.pid != pid && p.conn.is_some())
+            .map(|p| (p.pid, p.joined_as.as_str()))
             .chain(self.seat.iter().map(|s| (s.pid(), s.name.as_str())))
             .collect();
         let mut out = vec![
@@ -180,8 +188,8 @@ impl Game {
         for (other, _) in &others {
             out.push(Packet::simple(ProtoBufPayload::new(PlayerSkinsMessage::new(*other)))?);
         }
-        let everyone = self.players.iter().map(|p| (p.pid, p.name.as_str())).chain(self.seat.iter().map(|s| (s.pid(), s.name.as_str())));
-        for (id, name) in everyone {
+        let own = self.players.iter().find(|p| p.pid == pid).map(|p| (p.pid, p.joined_as.as_str()));
+        for (id, name) in others.iter().copied().chain(own) {
             out.push(Packet::simple(ProtoBufPayload::new(PlayerProfileMessage::new(id, name)))?);
         }
         out.push(self.map_check.clone());
@@ -265,16 +273,27 @@ impl Game {
             return Ok(());
         };
         let player = &mut self.players[index];
-        // An offline client joins without a name; it then keeps the configured one
-        if !name.is_empty() && !player.name.eq_ignore_ascii_case(&name) {
-            tracing::info!("{:?} takes the place of {}", name, player.name);
-            player.name = name.clone();
-        }
+        player.joined_as = name.clone();
         player.conn = Some(conn);
         let pid = player.pid;
         tracing::info!("{:?} joined as player {} ({})", name, pid, player.name);
         for packet in self.welcome(pid, local)? {
             self.send_to(pid, packet);
+        }
+        self.announce(pid, &name)
+    }
+
+    /// Tells every player already in about one who just joined, under the name it joined with.
+    fn announce(&self, pid: u8, name: &str) -> Result<()> {
+        let packets = [
+            Packet::simple(PlayerInfo::new(pid, name))?,
+            Packet::simple(ProtoBufPayload::new(PlayerSkinsMessage::new(pid)))?,
+            Packet::simple(ProtoBufPayload::new(PlayerProfileMessage::new(pid, name)))?,
+        ];
+        for other in self.players.iter().filter(|p| p.pid != pid && p.conn.is_some() && !p.left) {
+            for packet in &packets {
+                self.send_to(other.pid, packet.clone());
+            }
         }
         Ok(())
     }
@@ -361,7 +380,8 @@ impl Game {
         match verb {
             "status" => {
                 let players: Vec<String> = self.players.iter().map(|p| {
-                    format!("p{} {} conn={} map={} loaded={} left={}", p.pid, p.name, p.conn.is_some(), p.map_ok, p.loaded, p.left)
+                    format!("p{} {} ({:?}) conn={} map={} loaded={} left={}", p.pid, p.name, p.joined_as, p.conn.is_some(),
+                            p.map_ok, p.loaded, p.left)
                 }).collect();
                 let seat = self.seat.as_ref().map(|s| format!("seat={}", s.slot)).unwrap_or_else(|| "hidden".into());
                 format!("{:?} ticks={}{} up={}s {} | {}", self.phase, self.ticks, if self.waiting { " waiting" } else { "" },
