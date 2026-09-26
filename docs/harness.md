@@ -124,7 +124,9 @@ same launcher as the games, unless one runs already) and starts `harness/webui/b
 each game: the bridge reads the menus' port and guid from the activator's instance file and plays
 the page's part toward the web UI server, so everything else here works unchanged. Before each
 LAN search the bridge asks the activator for a fresh switch. `PlayOffline` is not sent (it starts
-a Battle.net sign-in on this build). One client for now. See [porting.md](porting.md#3-linux--wine).
+a Battle.net sign-in on this build), and the bridge joins only once the game's own menu page
+is up and its sign-in has started (one starting in the lobby or loading screen drops the client).
+Two clients share the one Wine prefix and its user folder. See [porting.md](porting.md#3-linux--wine).
 
 ### Players, clients and slots
 

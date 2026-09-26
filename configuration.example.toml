@@ -40,7 +40,7 @@ launcher = []
 server = "http://127.0.0.1:8777"
 
 
-# Linux + Wine (one client for now; see docs/porting.md): wine-staging 11.6 or newer, not Proton
+# Linux + Wine (two clients share the one prefix; see docs/porting.md): wine-staging 11.6 or newer, not Proton
 #
 # binary = "~/Games/wc3/drive_c/Program Files (x86)/Warcraft III/_retail_/x86_64/Warcraft III.exe"
 # webui = ""

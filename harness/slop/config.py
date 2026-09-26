@@ -92,12 +92,14 @@ class Config:
         return self.data / 'CustomMapData'
 
     def home_for(self, client):
-        """The home folder a client runs with: yours for the first, second_home for the second."""
-        return pathlib.Path.home() if client == 0 else self.second_home
+        """The home folder a client runs with: yours for the first, second_home for the second
+        (macOS). The Windows build's clients share the one Wine prefix and its user folder."""
+        return pathlib.Path.home() if client == 0 or self.windows_build else self.second_home
 
     def data_for(self, client):
-        """A client's user folder: `data`, moved under that client's home."""
-        if client == 0:
+        """A client's user folder: `data`, moved under that client's home (the same folder for the
+        Windows build's clients)."""
+        if client == 0 or self.windows_build:
             return self.data
         try:
             return self.second_home / self.data.relative_to(pathlib.Path.home())
@@ -225,9 +227,6 @@ def load(explicit=None, map_name=None):
         raise ConfigError(f'{path.name}: host.seat is a slot number or "auto"')
     if not 1 <= config.clients <= 2:
         raise ConfigError(f'{path.name}: clients.count is 1 or 2')
-    if config.windows_build and config.clients > 1:
-        raise ConfigError(f'{path.name}: the Windows build runs one client for now (a second needs a Wine prefix '
-                          f'or user of its own; see docs/porting.md): clients.count = 1')
     if len(config.names) < config.clients:
         raise ConfigError(f'{path.name}: clients.names needs a name per client')
     return config

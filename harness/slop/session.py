@@ -133,7 +133,7 @@ class Session:
         for index in range(config.clients):
             home = config.home_for(index)
             home.mkdir(parents=True, exist_ok=True)
-            env = dict(os.environ, HOME=str(home), CFFIXED_USER_HOME=str(home))
+            env = dict(os.environ) if config.windows_build else dict(os.environ, HOME=str(home), CFFIXED_USER_HOME=str(home))
             known = self._instance_files()
             self.launched.append(subprocess.Popen(config.launch, env=env, stdout=subprocess.DEVNULL,
                                                   stderr=subprocess.DEVNULL, start_new_session=True).pid)
@@ -238,6 +238,8 @@ class Session:
         # The second client's user folder sees the same map: its Maps/<folder> links to this one
         for client in range(1, config.clients):
             linked = config.data_for(client) / 'Maps' / config.map_folder
+            if linked == folder:
+                continue
             if linked.is_symlink() and linked.resolve() == folder.resolve():
                 continue
             if linked.exists() or linked.is_symlink():

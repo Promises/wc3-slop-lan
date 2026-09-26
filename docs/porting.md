@@ -254,8 +254,15 @@ launcher = ["env", "WINEPREFIX=/home/<user>/Games/wc3", "prime-run", "wine"]
 
 The harness sees a Windows build (the binary ends in `.exe`), starts `slop-activator.exe` with
 the same launcher, and a bridge per game. Run `slop` from the desktop session: a game started
-without `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY` exits at once. One client for now (a second needs
-a second prefix; the harness refuses two).
+without `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY` exits at once.
+
+Two clients run in the one prefix and share its user folder (`second_home` is not used): unlike on
+macOS, both games' map scripts run, and the library names its files by player, so they do not
+collide (**verified**: Maul, both heartbeats, and a 20-minute game without a crash or a leave).
+Each game signs in to Battle.net with the saved account once its menu page has loaded, and a
+sign-in that starts in the LAN lobby or on the loading screen throws that client out of the game
+(`LeaveLost`); with two games loading at once the second page can take long enough for that. So the
+bridge joins only once the page is up and, on the login screen, once the sign-in has started.
 
 ### 3.3 Network
 

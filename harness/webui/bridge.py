@@ -29,6 +29,8 @@ import time
 import urllib.request
 
 SETTLE = 15.0     # how long slop-activator may take to switch the provider when asked
+MENUS_UP = 120.0  # how long the menus' own page may take to load (two games loading at once are slow)
+SIGN_IN = 10.0    # how long the login screen may take to start its sign-in
 
 
 class Menus:
@@ -137,26 +139,49 @@ def main():
     found = instance(path)
     menus = Menus(found['port'], found['guid'])
     server = Server(url, str(found['port']))
-    screen, lobby = 'UNKNOWN', {}
+    screen, overlay, lobby = 'UNKNOWN', '', {}
     lan = {'wanted': None, 'asked': 0.0}
     hello = server.get('/hello')
     server.record(f'bridge for game {found["pid"]}: instance {hello["number"]}')
 
-    def activations():
-        return instance(path, timeout=5).get('activations', 0)
+    def served():
+        try:
+            return json.loads(pathlib.Path(path).read_text()).get('served', '')
+        except (OSError, ValueError):
+            return ''
+
+    def wait(until, seconds):
+        end = time.time() + seconds
+        while not until() and time.time() < end:
+            handle(menus.receive(0.25))
+        return until()
+
+    def settle():
+        # The menus' socket is up before their own page is. When the page loads, the game shows
+        # its login screen and signs in to Battle.net with the saved account, and a sign-in that
+        # starts in a LAN lobby or its loading screen throws the client out of the game. So the
+        # join waits for the page (its first screen) and, on the login screen, for the sign-in
+        # to start; one already under way does no harm
+        if not wait(lambda: screen != 'UNKNOWN', MENUS_UP):
+            server.record('the menus never reported a screen; joining anyway')
+        elif screen == 'LOGIN_DOORS' and not wait(lambda: overlay == 'AUTHENTICATION_OVERLAY', SIGN_IN):
+            server.record('no sign-in started on the login screen; joining anyway')
 
     def lanjoin(command):
+        settle()
         # A fresh TCPN provider for each search: asked of slop-activator, whose switch rebuilds the
         # provider, and waited for. (Not InitializeNetProvider, as the page sends: on the Windows
         # build that starts a Battle.net sign-in.)
         if not command.get('keepProvider'):
-            before = activations()
+            # Its own switch, told apart by a token: a switch the activator was making anyway
+            # (a game's first, say) must not count, or the search starts before the rebuild asked
+            # for and gets thrown out of the lobby by it
+            token = os.urandom(8).hex()
             request = pathlib.Path(path).with_suffix('.request')
-            request.write_text('switch')
-            end = time.time() + SETTLE
-            while activations() == before and time.time() < end:
-                handle(menus.receive(0.25))
-            if activations() == before:
+            partial = request.with_suffix('.request-part')
+            partial.write_text(token)
+            partial.replace(request)
+            if not wait(lambda: served() == token, SETTLE):
                 request.unlink(missing_ok=True)
                 server.record('slop-activator did not switch the provider in time; searching anyway')
         menus.send('SendGameListing')
@@ -175,13 +200,15 @@ def main():
             server.record(f'bridge: no {verb} here (it is for the page)')
 
     def handle(messages):
-        nonlocal screen, lobby
+        nonlocal screen, overlay, lobby
         for message in messages:
             kind, payload = message.get('messageType'), message.get('payload') or {}
             server.record(f'<- {kind} {json.dumps(payload)[:300]}')
             if kind == 'SetGlueScreen':
                 screen = payload.get('screen', screen)
                 server.post('/state', {'screen': screen, 'lobby': lobby})
+            elif kind == 'SetOverlayScreen':
+                overlay = payload.get('screen', overlay)
             elif kind == 'GameLobbySetup':
                 lobby = payload
             elif kind == 'GameList' and lan['wanted']:
