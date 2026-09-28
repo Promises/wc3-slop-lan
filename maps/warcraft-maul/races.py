@@ -875,6 +875,68 @@ def test_elementalist_runes(game):
     findings.raise_if_any('Elementalists')
 
 
+# Aviaries' Wyvern ------------------------------------------------------------------------------------
+
+AVIARIES, AVIARIES_BUILDER, WYVERN = 'I003', 'eC10', 'oC60'
+# The four creep players: the Wyvern's lightning must reach the units of each
+CREEP_PLAYERS = (13, 14, 15, 16)
+# Its lightning takes 15% of the life of every creep within 128 of it, on each of its attacks (every
+# 2.5 s); its own attack is 1 damage or so, nothing next to that on a target of 5 million
+WYVERN_REACH = 96
+
+
+def wyvern_targets(game, spot):
+    """A 5-million-life target of each creep player around the tower, within its lightning."""
+    offsets = ((WYVERN_REACH, 0), (-WYVERN_REACH, 0), (0, WYVERN_REACH), (0, -WYVERN_REACH))
+    return {player: game.create(player, maul.GROUND_TARGET, spot[0] + dx, spot[1] + dy, life=maul.TARGET_LIFE,
+                                rooted=True)[0]['id'] for player, (dx, dy) in zip(CREEP_PLAYERS, offsets)}
+
+
+def test_wyvern_lightning(game):
+    """Aviaries' Wyvern: each attack strikes every creep next to it for 15% of its life, whichever
+    creep player owns it (Navy's were left out once), and spares the boss waves (35-37; once it
+    spared 34-35 instead)."""
+    findings = Findings()
+    maul.start(game)
+    # Aviaries is switched off in the race picker; Debug mode lets it be picked from the Dev tab
+    maul.pick(game, RED, AVIARIES)
+    game.cmd(RED, f'.gold {GOLD}')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
+    placed = build_in_red_lane(game, AVIARIES_BUILDER, [('Wyvern', WYVERN)], findings)
+    findings.raise_if_any('building the Wyvern')
+    spot = placed[0][1]
+
+    def finished():
+        tower = next((u for u in game.units(RED) if u['type'] == WYVERN and abs(u['x'] - spot[0]) <= 64
+                      and abs(u['y'] - spot[1]) <= 64), None)
+        return tower is not None and tower['life'] >= game.inspect(tower['id']).get('max_life', 1)
+    game.wait('the Wyvern to stand', finished, 60)
+
+    def lost(targets):
+        """The share of its life each target lost, by creep player."""
+        return {player: 1 - game.inspect(target).get('life', 0) / maul.TARGET_LIFE for player, target in targets.items()}
+
+    # A normal wave: every creep player's target is struck
+    targets = wyvern_targets(game, spot)
+    time.sleep(12)
+    shares = lost(targets)
+    game.log('wave 1: ' + ', '.join(f'p{player} lost {share:.0%}' for player, share in shares.items()))
+    for player, share in shares.items():
+        findings.check(share >= 0.15, f'wave 1: the target of creep player {player} lost only {share:.1%}')
+    for player, target in targets.items():
+        game.remove(player, target)
+
+    # A boss wave: none is struck, only the tower's own attack lands
+    game.cmd(RED, '-wave 35')
+    targets = wyvern_targets(game, spot)
+    time.sleep(12)
+    shares = lost(targets)
+    game.log('wave 35: ' + ', '.join(f'p{player} lost {share:.0%}' for player, share in shares.items()))
+    for player, share in shares.items():
+        findings.check(share < 0.05, f'wave 35 (a boss): the target of creep player {player} lost {share:.1%}')
+    findings.raise_if_any('Wyvern')
+
+
 # Behaviours that need kills, time or a running wave, each on a game of its own ------------------
 
 def race_named(name):
