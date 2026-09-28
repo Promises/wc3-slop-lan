@@ -46,8 +46,11 @@ if data[0xd3c69d:0xd3c69d + 10] != bytes.fromhex('bf504f4f4ce8092b4f00'):
 PY
 
 script=$(mktemp -t slop-activate)
+# No breakpoint condition: the call follows mov edi,'LOOP' (checked above), so rdi is always LOOP
+# there. A condition makes lldb evaluate an expression in the game at the stop, the likely cause
+# of the activations that stopped at the breakpoint and never came back (under Rosetta)
 cat > "$script" <<LLDB
-breakpoint set --shlib "Warcraft III" --address $SITE --one-shot true --condition '(unsigned)\$rdi == 0x4c4f4f50'
+breakpoint set --shlib "Warcraft III" --address $SITE --one-shot true
 continue
 register write rdi 0x5443504e
 process detach
@@ -65,7 +68,14 @@ if ! curl -sf -X POST "$server/command" -d "$order" > /dev/null; then
   exit 1
 fi
 for _ in $(seq 40); do grep -q "detached" "$log" && break; sleep 0.5; done
-wait "$debugger" 2>/dev/null || true
+if grep -q "detached" "$log"; then
+  wait "$debugger" 2>/dev/null || true
+else
+  # lldb would wait on the breakpoint for good with the game attached: end it and its debug
+  # server, rather than leave a game stopped under a debugger (which ends that game too)
+  pkill -9 -P "$debugger" 2>/dev/null || true
+  kill -9 "$debugger" 2>/dev/null || true
+fi
 
 if grep -q "detached" "$log"; then
   ports=$(lsof -a -nP -p "$pid" -iUDP 2>/dev/null | awk 'NR>1 {print $9}' | grep -o ':1[67][0-9][0-9][0-9]' | tr '\n' ' ')
