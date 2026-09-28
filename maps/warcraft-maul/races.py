@@ -649,41 +649,43 @@ LOOT_ITEMS = {1: {'I02F', 'I029', 'I02B'}, 2: {'I02F', 'I029', 'I02B'}, 3: {'I02
               4: {'I02F', 'I029', 'I02B', 'I028'}, 5: {'I02F', 'I029', 'I02B', 'I028'},
               6: {'I02F', 'I02B', 'I028', 'I02A'}, 7: {'I02F', 'I028', 'I02B', 'I02A', 'I02C'},
               8: {'I02F', 'I028', 'I02A', 'I02B', 'I02C'}, 9: {'I02F', 'I028', 'I02A', 'I02B', 'I02C'}}
-# Each box stands this far from the next, inside red's lane
-LOOT_BOX_SPACING = 256
+# Towers built in numbers (the Loot Boxer's boxes, the Elementalists' runes) stand this far apart,
+# inside red's lane: 40 spots
+LANE_SPACING = 256
 
 
-def loot_box_spots():
-    """Spots for boxes in red's lane, LOOT_BOX_SPACING apart."""
+def red_lane_spots():
+    """Spots in red's lane, LANE_SPACING apart."""
     min_x, min_y, max_x, max_y = maul.lane_areas()[RED]
-    return [(x, y) for y in range(int(min_y) + LOOT_BOX_SPACING, int(max_y) - LOOT_BOX_SPACING + 1, LOOT_BOX_SPACING)
-            for x in range(int(min_x) + LOOT_BOX_SPACING, int(max_x) - LOOT_BOX_SPACING + 1, LOOT_BOX_SPACING)]
+    return [(x, y) for y in range(int(min_y) + LANE_SPACING, int(max_y) - LANE_SPACING + 1, LANE_SPACING)
+            for x in range(int(min_x) + LANE_SPACING, int(max_x) - LANE_SPACING + 1, LANE_SPACING)]
 
 
-def build_loot_boxes(game, plan, findings):
-    """Orders a box of each tier in the plan, each by a builder of its own at a spot of its own;
-    a spot the order is refused at is given up for the next free one. [(tier, spot)] ordered."""
-    spots = loot_box_spots()
+def build_in_red_lane(game, builder_type, plan, findings):
+    """Orders a building for each (label, unit type) in the plan, each by a builder of its own at
+    a spot of its own; a spot the order is refused at (one in red's lane refuses everything) is
+    given up for the next free one. [(label, spot)] ordered."""
+    spots = red_lane_spots()
     placed = []
-    for tier in plan:
+    for label, unit_type in plan:
         while spots:
             spot = spots.pop(0)
             before = len(game.events('order'))
-            builder = game.create(RED, LOOT_BOXER_BUILDER, *spot)[0]['id']
-            game.build(RED, builder, LOOT_BOXES[tier - 1], *spot)
+            builder = game.create(RED, builder_type, *spot)[0]['id']
+            game.build(RED, builder, unit_type, *spot)
             lines = []
 
             def answered():
                 lines[:] = [line for line in game.events('order')[before:] if ' build ' in line]
                 return lines
-            game.wait(f'the tier {tier} box order', answered, 15)
+            game.wait(f'the {label} order', answered, 15)
             if lines[0].endswith('issued'):
-                placed.append((tier, spot))
+                placed.append((label, spot))
                 break
-            game.log(f'the tier {tier} box was refused at {spot}; trying the next spot')
+            game.log(f'the {label} was refused at {spot}; trying the next spot')
             game.remove(RED, builder)
         else:
-            findings.append(f'a tier {tier} box was refused at every spot in the lane')
+            findings.append(f'the {label} was refused at every spot in the lane')
     return placed
 
 
@@ -706,7 +708,9 @@ def test_loot_boxer(game):
     before = len(game.events('lootbox'))
     placed = []
     try:
-        placed = build_loot_boxes(game, plan, findings)
+        placed = [(int(label.split()[1]), spot) for label, spot in
+                  build_in_red_lane(game, LOOT_BOXER_BUILDER, [(f'tier {tier} box', LOOT_BOXES[tier - 1])
+                                                              for tier in plan], findings)]
         # Tiers 1-3 turn into towers when built; the higher boxes are opened once they stand
         closed = [(tier, spot) for tier, spot in placed if tier >= LOOT_BOX_OPENED]
         boxes, opened = {}, set()
@@ -769,6 +773,79 @@ def test_loot_boxer(game):
     except TestFailed as error:
         findings.append(f'the towers were not looked at: {error}')
     findings.raise_if_any('Loot Boxer')
+
+
+# Elementalists -------------------------------------------------------------------------------------
+
+ELEMENTALISTS = 'I024'
+ELEMENTALIST_BUILDER = 'e00W'
+UNCHARGED_RUNE = 'n00A'
+# The charges an Uncharged Rune may get (GlobalSettings ELEMENTALIST_ABILITIES): each is a Channel
+# that turns the rune into its element's rune (UnchargedRuneMorph)
+ELEMENTS = {'A0BO': ('Water', 'absorb', 'n01R'), 'A0BS': ('Fire', 'acidbomb', 'n01S'),
+            'A0C0': ('Nature', 'animatedead', 'n022'), 'A0C1': ('Air', 'antimagicshell', 'n023'),
+            'A0C2': ('Death', 'avatar', 'n024'), 'A0C3': ('Life', 'banish', 'n025')}
+# Each rune gets 2 of the 6 at random, so one has a given element 1 time in 3: 20 runes without
+# it happen 3 times in 10,000
+RUNES = 20
+
+
+def test_elementalist_runes(game):
+    """Elementalists: each Uncharged Rune gets two different charges, every element among them
+    (Life included), and a charge turns the rune into its element's rune."""
+    findings = Findings()
+    maul.start(game)
+    builder = maul.pick(game, RED, ELEMENTALISTS)
+    findings.check(builder['type'] == ELEMENTALIST_BUILDER, f"the pick gave a {builder['type']}, not {ELEMENTALIST_BUILDER}")
+    game.cmd(RED, f'.gold {GOLD}')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
+
+    placed = build_in_red_lane(game, ELEMENTALIST_BUILDER, [(f'rune {n + 1}', UNCHARGED_RUNE) for n in range(RUNES)],
+                               findings)
+    runes = {}
+
+    def standing():
+        units = game.units(RED)
+        for label, spot in placed:
+            rune = next((u for u in units if u['type'] == UNCHARGED_RUNE and abs(u['x'] - spot[0]) <= 64
+                         and abs(u['y'] - spot[1]) <= 64), None)
+            if rune is not None:
+                runes[label] = rune['id']
+        return len(runes) == len(placed)
+    try:
+        game.wait(f'{len(placed)} Uncharged Runes to stand', standing, 60)
+    except TestFailed as error:
+        findings.append(f'stopped: {error}')
+
+    charges = {}
+    for label, rune in runes.items():
+        levels = game.inspect(rune, *ELEMENTS)
+        charges[label] = [ability for ability in ELEMENTS if levels.get(ability, 0) > 0]
+        findings.check(len(charges[label]) == 2, f'{label} has {len(charges[label])} charges: {charges[label]}')
+    counts = {ELEMENTS[ability][0]: sum(ability in got for got in charges.values()) for ability in ELEMENTS}
+    game.log(f'charges over {len(charges)} runes: ' + ', '.join(f'{name} {count}' for name, count in counts.items()))
+    for name, count in counts.items():
+        findings.check(count > 0, f'no rune of {len(charges)} got the {name} charge')
+
+    # One charge of each element that came up is used, and the rune must become that element's
+    # (a new unit in its place: Tower.Upgrade replaces the rune)
+    spots = dict(placed)
+    used = set()
+    for label, got in charges.items():
+        ability = next((a for a in got if a not in used), None)
+        if ability is None:
+            continue
+        used.add(ability)
+        name, order, element = ELEMENTS[ability]
+        spot = spots[label]
+        game.order(RED, runes[label], order)
+        try:
+            game.wait(f'{label} to turn into the {name} rune ({element})',
+                      lambda: any(u['type'] == element and abs(u['x'] - spot[0]) <= 64 and abs(u['y'] - spot[1]) <= 64
+                                  for u in game.units(RED)), 15)
+        except TestFailed as error:
+            findings.append(f'{label}: {error}')
+    findings.raise_if_any('Elementalists')
 
 
 # Behaviours that need kills, time or a running wave, each on a game of its own ------------------
