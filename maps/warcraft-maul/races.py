@@ -642,13 +642,32 @@ LOOT_BOXER_BUILDER = 'u043'
 # Either way the Loot Boxer gets an item for a roll of 1-100.
 LOOT_BOXES = ['u044', 'u045', 'u047', 'u046', 'u048', 'u049', 'u04A', 'u04B', 'u04C']
 LOOT_BOX_OPENED = 4
-# How many of each tier the test builds: 24 rolls in all
-LOOT_BOX_COUNTS = {1: 12, 2: 4, 3: 2, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1}
-# The items a box of each tier can give (LootBoxerHandler.Loot in the map repo)
-LOOT_ITEMS = {1: {'I02F', 'I029', 'I02B'}, 2: {'I02F', 'I029', 'I02B'}, 3: {'I02F', 'I029', 'I02B'},
-              4: {'I02F', 'I029', 'I02B', 'I028'}, 5: {'I02F', 'I029', 'I02B', 'I028'},
-              6: {'I02F', 'I02B', 'I028', 'I02A'}, 7: {'I02F', 'I028', 'I02B', 'I02A', 'I02C'},
-              8: {'I02F', 'I028', 'I02A', 'I02B', 'I02C'}, 9: {'I02F', 'I028', 'I02A', 'I02B', 'I02C'}}
+# How many of each tier the test builds: 38 rolls in all (red's lane holds 39), most of them in
+# the tiers whose loot is worth having
+LOOT_BOX_COUNTS = {1: 6, 2: 3, 3: 3, 4: 3, 5: 3, 6: 5, 7: 5, 8: 5, 9: 5}
+ROCKS, PREMIUM, LOOTBAG, STICK, COIN, KOINZ = 'I02F', 'I029', 'I02B', 'I028', 'I02A', 'I02C'
+# Tiers 7-9, which give no Rocks: (item, up to roll) in order, the last one to 100
+HIGH_TIER_LOOT = {7: ((STICK, 70), (LOOTBAG, 85), (COIN, 95), (KOINZ, 100)),
+                  8: ((STICK, 65), (COIN, 80), (LOOTBAG, 92), (KOINZ, 100)),
+                  9: ((STICK, 60), (COIN, 80), (LOOTBAG, 90), (KOINZ, 100))}
+
+
+def loot_for(tier, roll):
+    """The item a box of that tier (1-9) gives for a roll of 1-100, as the map's table has it
+    (LootBoxerHandler.Loot): Rocks 95/90/85% for tiers 1-3, 80/70/60% for tiers 4-6, none for 7-9."""
+    if tier <= 3:
+        return ROCKS if roll <= 100 - 5 * tier else PREMIUM if roll <= 100 - 2 * tier else LOOTBAG
+    if tier >= 7:
+        return next(item for item, up_to in HIGH_TIER_LOOT[tier] if roll <= up_to)
+    if roll <= 80 - 10 * (tier - 4):
+        return ROCKS
+    second, third, last = (PREMIUM, LOOTBAG, STICK) if tier <= 5 else (LOOTBAG, STICK, COIN)
+    return second if roll <= 90 - 5 * (tier - 4) else third if roll <= 100 - 2 * (tier - 3) else last
+
+
+def rock_charges(tier):
+    """The charges Rocks from a box of tier 4-6 come with (the map rolls them between these)."""
+    return 1, tier - 1
 # Towers built in numbers (the Loot Boxer's boxes, the Elementalists' runes) stand this far apart,
 # inside red's lane: 40 spots
 LANE_SPACING = 256
@@ -751,15 +770,23 @@ def test_loot_boxer(game):
     strays = sorted({str(tier) for tier in by_tier if tier not in LOOT_BOX_COUNTS})
     findings.check(not strays, f'loot was given for tier(s) {", ".join(strays)}, which no box has')
     for entry in loot:
-        tier, roll, item = entry.get('tier'), entry.get('roll'), entry.get('item')
-        findings.check(isinstance(roll, int) and 1 <= roll <= 100, f'a tier {tier} box rolled {roll}, not 1-100')
-        findings.check(item in LOOT_ITEMS.get(tier, ()), f'a tier {tier} box gave {item} for a roll of {roll}')
-        if item == 'I02F' and tier >= LOOT_BOX_OPENED:
-            findings.check(entry.get('charges', 0) >= 1, f'a tier {tier} box gave I02F with no charges')
+        tier, roll, item, charges = entry.get('tier'), entry.get('roll'), entry.get('item'), entry.get('charges', 0)
+        if not (isinstance(roll, int) and 1 <= roll <= 100 and tier in LOOT_BOX_COUNTS):
+            findings.append(f'a tier {tier} box rolled {roll}, not 1-100')
+            continue
+        findings.check(item == loot_for(tier, roll), f'a tier {tier} box gave {item} for a roll of {roll}, '
+                                                    f'the table says {loot_for(tier, roll)}')
+        if item == ROCKS and tier >= LOOT_BOX_OPENED:
+            low, high = rock_charges(tier)
+            findings.check(low <= charges <= high, f'a tier {tier} box gave Rocks with {charges} charges, not {low}-{high}')
+    items = {}
+    for entry in loot:
+        items.setdefault(entry.get('tier'), []).append(entry.get('item'))
+    game.log('Loot Boxer loot: ' + '; '.join(f'tier {tier} ' + ' '.join(sorted(got)) for tier, got in sorted(items.items())))
     rolls = sorted(entry['roll'] for entry in loot if isinstance(entry.get('roll'), int))
     if rolls:
         game.log(f'Loot Boxer rolls ({len(rolls)}): {" ".join(map(str, rolls))}')
-        # 24 rolls of 1-100 all on one side of 50 happen once in 8 million
+        # 38 rolls of 1-100 all on one side of 50 happen about once in 100 billion
         findings.check(rolls[0] <= 50 < rolls[-1], f'the rolls ran from {rolls[0]} to {rolls[-1]} only')
 
     # Every box is gone, and a tower of the pool stands in its place
