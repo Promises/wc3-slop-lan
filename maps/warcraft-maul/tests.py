@@ -87,3 +87,56 @@ def test_settings_command_and_debug_mode(game):
     if (after.get('wave'), after.get('timer'), after.get('spawning')) != (wave, 0, False):
         raise TestFailed(f'after the wave: wave {after.get("wave")} (was {wave}), timer {after.get("timer")}, '
                          f'spawning {after.get("spawning")}')
+
+
+# The creep abilities (src/World/Entity/CreepAbilities in the map repo), by ability id
+CREEP_ABILITIES = {'A069': 'Hardened Skin', 'A06A': 'Evasion', 'A06C': 'Armor Bonus', 'A08G': 'Cripple Aura',
+                   'A00D': 'Spell Shield', 'A01S': 'Tornado Aura', 'A0B3': 'Vampiric Aura', 'A01E': 'Divine Shield',
+                   'A01T': 'Walk It Off', 'A06D': 'Morning Person'}
+# The players the waves spawn for (Navy, Turquoise, Violet, Wheat)
+CREEP_PLAYERS = (13, 14, 15, 16)
+
+
+def creeps(game):
+    return [unit for player in CREEP_PLAYERS for unit in game.units(player)]
+
+
+def test_creep_abilities_by_difficulty(game):
+    """Each wave's creeps get one random creep ability per 100% of difficulty above 100% (none at
+    100%, three at 400%), and a boss wave all ten. The difficulty is changed between waves with the
+    dev build's -diff, and each wave is cleared away before the next."""
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    game.cmd(RED, '-lives 1000000')
+    problems = []
+    # Wave 2 is a ground wave (an air one never gets Divine Shield); 35 is the first boss
+    for difficulty, wave, wanted in ((100, 2, 0), (200, 2, 1), (300, 2, 2), (400, 2, 3), (200, 35, len(CREEP_ABILITIES))):
+        game.cmd(RED, f'-diff {difficulty}')
+        game.cmd(RED, f'-wave {wave}')
+        known = {unit['id'] for unit in creeps(game)}
+        maul.start_wave(game)
+        # Rows spawn half a second apart: wait until the count holds
+        counts = []
+        game.wait_for(f'wave {wave} to finish spawning',
+                      lambda b: counts.append(b.get('creeps') or 0) or (len(counts) >= 4 and counts[-1] > 0
+                                                                      and len(set(counts[-4:])) == 1), timeout=90)
+        spawned = [unit for unit in creeps(game) if unit['id'] not in known]
+        if not spawned:
+            problems.append(f'{difficulty}%: wave {wave} spawned no creeps')
+            continue
+        # One set per wave: every creep has the same abilities, so a few are looked at
+        sets = []
+        for unit in spawned[:3]:
+            levels = game.inspect(unit['id'], *CREEP_ABILITIES)
+            sets.append(sorted(CREEP_ABILITIES[a] for a in CREEP_ABILITIES if levels.get(a, 0) > 0))
+        game.log(f'{difficulty}% wave {wave}: {len(sets[0])} abilities: {", ".join(sets[0]) or "none"}')
+        if any(got != sets[0] for got in sets):
+            problems.append(f'{difficulty}% wave {wave}: the creeps differ: {sets}')
+        if len(sets[0]) != wanted:
+            problems.append(f'{difficulty}% wave {wave}: {len(sets[0])} abilities ({", ".join(sets[0]) or "none"}), '
+                            f'wanted {wanted}')
+        # The wave ends when its last creep dies
+        game.cmd(RED, '-killall')
+        game.wait_for(f'wave {wave} to be over', lambda b: b.get('spawning') is False, timeout=60)
+    if problems:
+        raise TestFailed(f'{len(problems)} problem(s)\n  - ' + '\n  - '.join(problems))
