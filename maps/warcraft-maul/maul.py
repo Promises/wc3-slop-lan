@@ -36,6 +36,44 @@ def lane_areas():
             for match in re.findall(rf'new Rectangle\(\[{number},{number},{number},{number}\]\)', block)]
 
 
+# The Maze Designer's canonical lane (docs/maze-designer.md in the map repo) is Blue's lane as it
+# lies: grid corner (cx, cy) is at x = -768 + 64 cx, y = 2304 + 64 cy, with checkpoint 1 at (0, 4096)
+CANONICAL_ORIGIN = (-768, 2304)
+CANONICAL_CHECKPOINT = (0, 4096)
+GRID = 64
+COLOURS = ['RED', 'BLUE', 'TEAL', 'PURPLE', 'YELLOW', 'ORANGE', 'GREEN', 'PINK', 'GRAY', 'LIGHT_BLUE',
+           'DARK_GREEN', 'BROWN', 'MAROON']
+
+
+@functools.lru_cache(maxsize=None)
+def lane_frames():
+    """Each lane's frame as the map's LaneTransfer has it, red's first: (origin, along, across).
+    The origin is the centre of the lane's checkpoint 1, `along` the unit step towards its
+    checkpoint 2, and `across` (-along.y, -along.x) - so the lanes come out turned or mirrored
+    into one another, as the map carries layouts between them."""
+    source = (MAUL / 'src/World/WarcraftMaulSettings.ts').read_text()
+    blocks = re.split(r'new PlayerSpawns\(worldMap, COLOUR\.(\w+)\);', source)[1:]
+    frames = {}
+    for colour, body in zip(blocks[::2], blocks[1::2]):
+        rects = [[float(v) for v in rect.split(',')]
+                 for rect in re.findall(r'\.next = new CheckPoint\(Rect\(([^)]+)\)', body)[:2]]
+        (x1, y1), (x2, y2) = [((r[0] + r[2]) / 2, (r[1] + r[3]) / 2) for r in rects]
+        length = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+        along = ((x2 - x1) / length, (y2 - y1) / length)
+        frames[colour] = ((x1, y1), along, (-along[1], -along[0]))
+    return [frames[colour] for colour in COLOURS]
+
+
+def lane_point(lane, corner):
+    """A Maze Designer grid corner [cx, cy] as a world point in that lane, on the map's 64 grid."""
+    (ox, oy), (ux, uy), (vx, vy) = lane_frames()[lane]
+    x = CANONICAL_ORIGIN[0] + GRID * corner[0]
+    y = CANONICAL_ORIGIN[1] + GRID * corner[1]
+    along, across = CANONICAL_CHECKPOINT[1] - y, x - CANONICAL_CHECKPOINT[0]
+    snap = lambda v: int(round(v / GRID)) * GRID
+    return snap(ox + along * ux + across * vx), snap(oy + along * uy + across * vy)
+
+
 # A player's own lane holds several towers at once, far enough apart that none reaches another's
 # target: near its corners when it is wide (red's, 2432 x 1536: 1184 or more between a tower and
 # another's target), at its top and bottom when it is tall and narrow (blue's)
@@ -98,21 +136,31 @@ def sync(game, player, message):
     game.cmd(player, '@' + message)
 
 
-def start(game, attempts=12):
-    """Debug mode (no wave progression) at normal difficulty, set with the map's settings command
-    as a host bot would, so nothing but the test itself happens in the lanes.
+def start(game, difficulty=100, attempts=12):
+    """Debug mode (no wave progression) at that difficulty (100-400), set with the map's settings
+    command as a host bot would, so nothing but the test itself happens in the lanes.
 
     The map takes the settings only from the host it detected, and only once it waits for them,
     which is a few seconds into the game - a command before that is dropped. So it is sent until
-    the round exists (the heartbeat's wave turns 1)."""
+    the heartbeat shows Debug mode. The difficulty scales creeps spawned from then on (from 300
+    they also get random abilities). The map must be a dev build (map.build: npm run build:dev):
+    only those take the debug commands the tests use (-wave, -lives, -start in Debug mode)."""
+    beat = fresh_beat(game)
+    if beat.get('dev') is False:
+        raise TestFailed('the map is not a dev build, so it has no debug commands: run with --build '
+                         '(npm run build:dev)')
     for _ in range(attempts):
-        game.cmd(RED, '-s debug 100')
+        if beat.get('mode') == 'debug':
+            return
+        if beat.get('mode') not in (None, 'none'):
+            raise TestFailed(f'the game is already in {beat.get("mode")} mode: the settings came too late')
+        game.cmd(RED, f'-s debug {difficulty}')
         try:
-            game.wait('the settings to apply', lambda: (fresh_beat(game).get('wave') or 0) >= 1, 5)
+            game.wait('the settings to apply', lambda: fresh_beat(game).get('mode') == 'debug', 5)
             return
         except TestFailed:
-            continue
-    raise TestFailed('the game never took the settings (is red the detected host?)')
+            beat = fresh_beat(game)
+    raise TestFailed(f'the game never took the settings (is red the detected host?): mode {beat.get("mode")}')
 
 
 def start_wave(game):
