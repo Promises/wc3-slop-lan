@@ -13,6 +13,11 @@ from slop import TestFailed
 # Race shop items (Beginner races); a normal pick costs the starting lumber
 HUMAN_TOWN_HALL = 'I006'
 ORC_STRONGHOLD = 'I007'
+HYBRID_RANDOM = 'I00X'
+NORMAL_RANDOM = 'I00V'
+HYBRID_BUILDER = 'e00I'
+# The units a repick leaves the player (Commands.RepickRemoveConditions in the map repo)
+KEPT_ON_REPICK = ('h03S', 'e00C')
 
 
 def picked(game, player):
@@ -140,3 +145,38 @@ def test_creep_abilities_by_difficulty(game):
         game.wait_for(f'wave {wave} to be over', lambda b: b.get('spawning') is False, timeout=60)
     if problems:
         raise TestFailed(f'{len(problems)} problem(s)\n  - ' + '\n  - '.join(problems))
+
+
+def test_repick_starts_over(game):
+    """-repick before the first wave forgets the pick: the same race can be picked again, and
+    Hybrid Random is open after a repick even from a normal random (both were refused once). There
+    is no repick from Hybrid Random."""
+    maul.start(game)
+
+    def repick(builder_type):
+        game.cmd(RED, '-repick')
+        game.wait('the repick to take the builder', lambda: not any(u['type'] == builder_type for u in game.units(RED)), 15)
+
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    repick('hC07')
+    # The same race again: refused as "already has" before
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    repick('hC07')
+    # A normal random, then a repick: Hybrid Random was refused after it
+    before = len(game.events('rolled'))
+    sync(game, RED, f'race-pick:{NORMAL_RANDOM}')
+    game.wait('the normal random', lambda: any(' rolled p0 ' in line for line in game.events('rolled')[before:]), 20)
+    rolled = [line for line in game.events('rolled')[before:] if ' rolled p0 ' in line][0]
+    game.cmd(RED, '-repick')
+    game.wait('the repick to take the rolled builder', lambda: not [u for u in game.units(RED) if u['type'] != HYBRID_BUILDER
+                                                                   and u['type'] not in KEPT_ON_REPICK], 15)
+    before = len(game.events('hybrid'))
+    sync(game, RED, f'race-pick:{HYBRID_RANDOM}')
+    game.wait(f'Hybrid Random to hand out towers (after {rolled.split(" rolled ")[1]} and a repick)',
+              lambda: any(' hybrid p0 ' in line for line in game.events('hybrid')[before:]), 20)
+    game.wait('the hybrid builder', lambda: any(u['type'] == HYBRID_BUILDER for u in game.units(RED)), 15)
+    # No repick from Hybrid Random: the hybrid builder stays
+    game.cmd(RED, '-repick')
+    time.sleep(3)
+    if not any(u['type'] == HYBRID_BUILDER for u in game.units(RED)):
+        raise TestFailed('-repick took the hybrid builder: there is no repick from Hybrid Random')
