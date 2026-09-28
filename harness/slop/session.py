@@ -104,6 +104,8 @@ class Session:
         self.seat = None
         self.host_log = None
         self.saved = False
+        # Numbers the create requests, so each takes only its own units (create_later)
+        self._create_tags = 0
 
     # --- lifecycle -------------------------------------------------------------------------------
 
@@ -401,16 +403,21 @@ class Session:
         return self.finish(self.create_later(player, unit_type, x, y, count, life, frozen, rooted), timeout)
 
     def create_later(self, player, unit_type, x, y, count=1, life=None, frozen=False, rooted=False):
-        """create() without waiting: a Pending whose result() is the units made."""
+        """create() without waiting: a Pending whose result() is the units made. Several may be
+        under way at once, for one player or several: each request is tagged, and takes only its
+        own units."""
         before = len(self.events('created'))
+        self._create_tags += 1
+        tag = f'c{self._create_tags}'
         options = (f' life={life}' if life else '') + (' frozen' if frozen else '') + (' rooted' if rooted else '')
-        self.cmd(player, f'.create {unit_type} {x} {y} {count}{options}')
+        self.cmd(player, f'.create {unit_type} {x} {y} {count}{options} tag={tag}')
         return Pending(f'{count} {unit_type} to be created',
-                       lambda: len(self._new_created(before, player)) >= count,
-                       lambda: self._new_created(before, player)[:count])
+                       lambda: len(self._new_created(before, player, tag)) >= count,
+                       lambda: self._new_created(before, player, tag)[:count])
 
-    def _new_created(self, before, player):
-        return [c for c in map(trace.parse_created, self.events('created')[before:]) if c and c['player'] == player]
+    def _new_created(self, before, player, tag):
+        return [c for c in map(trace.parse_created, self.events('created')[before:])
+                if c and c['player'] == player and c['tag'] == tag]
 
     def inspect(self, unit, *abilities, timeout=15):
         """A unit right now, any owner: type, owner, life, max_life, mana, damage_min/max, cd, range,

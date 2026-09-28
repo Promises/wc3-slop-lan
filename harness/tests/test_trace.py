@@ -9,6 +9,12 @@ from slop import trace  # noqa: E402
 
 
 class TraceTest(unittest.TestCase):
+    def test_created(self):
+        # A tagged create's units carry the tag, so requests under way at once keep apart
+        self.assertEqual(trace.parse_created('7 t9 h1 created p0 id=5 type=nC03 at=-2560,4736 tag=c3'),
+                         dict(player=0, id=5, type='nC03', x=-2560, y=4736, tag='c3'))
+        self.assertIsNone(trace.parse_created('7 t9 h1 created p13 id=2 type=u006 at=-2000,4700')['tag'])
+
     def test_beat(self):
         beat = trace.parse_beat('41 t120 h5000 beat handles=5000 cmdpoll=12 lives=100 wave=2 spawning=true '
                                 'p0(g=500 l=100 k=3 t=2) p1(g=250 l=0)')

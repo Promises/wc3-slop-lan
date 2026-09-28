@@ -39,8 +39,11 @@ do
     local SELF_PREFIX = Slop.prefix .. 'self'
     -- A flush writes at most this many lines, which bounds the stall it causes
     local CHUNK_LINES = 400
-    -- A cap so a long game cannot fill the folder; a heartbeat-only game takes hours to reach it
+    -- A cap so a long game cannot fill the folder. What was noted is written every FLUSH_SECONDS
+    -- (and at once for urgent categories, and after each command), so a quiet game fills it in
+    -- about MAX_CHUNKS * FLUSH_SECONDS: close to three hours
     local MAX_CHUNKS = 2000
+    local FLUSH_SECONDS = 5
     local TICK_SECONDS = 0.1
     local POLL_SECONDS = 0.5
     -- The ability tooltip a command file sets and the poll reads back
@@ -48,6 +51,8 @@ do
 
     local pending = {}
     local sequence, ticks, chunk, attempt, lastFileCommand = 0, 0, 0, 0, 0
+    -- While a command runs its notes wait, urgent ones too: it is written whole when it is done
+    local holding = 0
     local started = false
     local urgent = {slop = true, order = true}
     local commandHooks, beatHooks, playerHooks = {}, {}, {}
@@ -93,7 +98,7 @@ do
         end
         sequence = sequence + 1
         pending[#pending + 1] = string.format('%d t%d h%d %s %s', sequence, ticks, Slop.handleMark(), category, text)
-        if #pending >= CHUNK_LINES or urgent[category] then
+        if #pending >= CHUNK_LINES or (urgent[category] and holding == 0) then
             Slop.flush()
         end
     end
@@ -220,9 +225,6 @@ do
                 math.floor(GetWidgetLife(u)), OrderId2String(order) or tostring(order)))
         end)
         Slop.note('unit', 'p' .. index .. ' end')
-        -- The list at once, as one chunk: flushed a line at a time, a harness polling a player's
-        -- units every second used up the chunks in minutes
-        Slop.flush()
     end
 
     -- .order <unit> <order> [x y | target]: an order to one of the player's own units
@@ -268,11 +270,14 @@ do
     -- attacks, Burning Oil's among them, ignore paused units)
     builtins['.create'] = function(index, words)
         local count = math.max(1, math.tointeger(tonumber(words[5]) or 1) or 1)
-        local life, frozen, rooted
+        local life, frozen, rooted, tag
         for i = 6, #words do
             life = life or math.tointeger(tonumber(words[i]:match('^life=(%d+)$') or ''))
             frozen = frozen or words[i] == 'frozen'
             rooted = rooted or words[i] == 'rooted'
+            -- Echoed on each unit's line, so a harness with several creates under way can tell
+            -- whose units are whose
+            tag = tag or words[i]:match('^tag=(%S+)$')
         end
         for _ = 1, count do
             local u = CreateUnit(Player(index), fourcc(words[2]), tonumber(words[3]), tonumber(words[4]), 270)
@@ -288,7 +293,7 @@ do
                 SetUnitPropWindow(u, 0)
             end
             Slop.note('created', string.format('p%d id=%d type=%s at=%d,%d', index, u and Slop.ref(u) or 0,
-                words[2], math.floor(tonumber(words[3])), math.floor(tonumber(words[4]))))
+                words[2], math.floor(tonumber(words[3])), math.floor(tonumber(words[4]))) .. (tag and ' tag=' .. tag or ''))
         end
     end
 
@@ -462,22 +467,35 @@ do
     --- Runs one command line as a player (0-based slot), on the client this is called on. Only
     --- call it from something every client runs alike, such as a sync event.
     function Slop.run(index, line)
+        -- The command and its answer (a unit list, units made, an order's result) go out as one
+        -- chunk as soon as it is done: a harness waits for the answer, and a line a chunk used
+        -- up the chunks in minutes
+        holding = holding + 1
         Slop.note('slop', 'p' .. index .. ' ' .. line)
         local words = {}
         for word in line:gmatch('%S+') do
             words[#words + 1] = word
         end
         local builtin = builtins[words[1] or '']
+        local handled = false
         if builtin then
             safely(words[1], builtin, index, words)
-            return
-        end
-        for _, hook in ipairs(commandHooks) do
-            if safely('command hook', hook, index, line) then
-                return
+            handled = true
+        else
+            for _, hook in ipairs(commandHooks) do
+                if safely('command hook', hook, index, line) then
+                    handled = true
+                    break
+                end
             end
         end
-        Slop.note('slop', 'p' .. index .. ' unhandled')
+        if not handled then
+            Slop.note('slop', 'p' .. index .. ' unhandled')
+        end
+        holding = holding - 1
+        if holding == 0 then
+            Slop.flush()
+        end
     end
 
     -- Channels ---------------------------------------------------------------------------------
@@ -553,7 +571,7 @@ do
         -- A simulation clock: timers run in lockstep, the wall clock does not
         every(TICK_SECONDS, function() ticks = ticks + 1 end)
         every(1, heartbeat)
-        every(1, Slop.flush)
+        every(FLUSH_SECONDS, Slop.flush)
         listen()
         if Slop.files then
             every(POLL_SECONDS, poll)

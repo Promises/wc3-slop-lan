@@ -146,7 +146,8 @@ check('it started after main, writing under the local player', find('slop starte
 
 Slop.heartbeat(function() return 'wave=3' end)
 Slop.playerFields(function(p) return 'k=' .. p end)
-run(1)
+-- Beats go into the trace with the next timed write, every 5 seconds
+run(5)
 local beat = find(' beat ')
 check('a heartbeat was written: ' .. tostring(beat), beat and beat:match('wave=3') and beat:match('p0%(g=500 l=100 fu=0 fc=10 k=0%)')
     and beat:match('p1%(') and not beat:match('p17%('))
@@ -208,6 +209,11 @@ check('.create sets life and freezes at once', created[1].maxlife == 777 and cre
 check('.create makes the units for that player', #created == 2 and created[1].owner == 13 and find('created p13 id=2 type=u006 at=%-2000,4700') ~= nil)
 fromHost('13 .create u006 -2100 4700 1 rooted')
 check('.create roots a unit without pausing it', created[3].speed == 0 and created[3].prop == 0 and not created[3].paused)
+fromHost('13 .create u006 -2200 4700 1 tag=c7')
+Slop.flush()
+check('.create echoes its tag on each unit', find('created p13 id=%d+ type=u006 at=%-2200,4700 tag=c7') ~= nil)
+check('a command and its answer are written as one chunk', chunkOf('slop p13 .create u006 %-2200') ~= nil
+    and chunkOf('slop p13 .create u006 %-2200') == chunkOf('tag=c7'))
 fromHost('0 .inspect 2 A0v1 B000')
 Slop.flush()
 check('.inspect traces the unit and the levels asked for', find('inspect id=2 type=u006 owner=p13 at=%-2000,4700 order=0 life=777/777 mana=0 dmg=59%+1d2 cd=1.50 range=800 armor=2 speed=0 A0v1=2 B000=0') ~= nil)

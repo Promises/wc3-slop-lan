@@ -111,13 +111,13 @@ def polling_folder(folders, slot):
     return next((f for f in _folders(folders) if (f / f'{BEAT}-p{slot}.txt').exists()), None)
 
 
-CREATED = re.compile(r'p(\d+) id=(\d+) type=(\S+) at=(-?\d+),(-?\d+)')
+CREATED = re.compile(r'p(\d+) id=(\d+) type=(\S+) at=(-?\d+),(-?\d+)(?: tag=(\S+))?')
 
 
 def parse_created(line):
     match = CREATED.search(line)
     return match and dict(player=int(match.group(1)), id=int(match.group(2)), type=match.group(3),
-                          x=int(match.group(4)), y=int(match.group(5)))
+                          x=int(match.group(4)), y=int(match.group(5)), tag=match.group(6))
 
 
 def parse_fields(line):

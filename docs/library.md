@@ -60,7 +60,7 @@ They start with a dot, so they can't clash with a map's own chat commands.
 | `.order <unit> <order> <target>` | a target order at another unit, by its ref |
 | `.build <builder> <type> <x> <y>` | a build order; the type as its four letters |
 | `.gold <n>`, `.lumber <n>`, `.foodcap <n>` | set the player's resources, or food cap |
-| `.create <type> <x> <y> [count] [life=<n>] [frozen] [rooted]` | units of that type for the player (a creep player, say): `created p13 id=… type=… at=x,y`; with their life set, and paused (`frozen`) or unable to move while still acting (`rooted`), from the moment they exist |
+| `.create <type> <x> <y> [count] [life=<n>] [frozen] [rooted] [tag=<t>]` | units of that type for the player (a creep player, say): `created p13 id=… type=… at=x,y`; with their life set, and paused (`frozen`) or unable to move while still acting (`rooted`), from the moment they exist. A `tag` is echoed at the end of each unit's line (` tag=<t>`), so several creates under way at once can be told apart |
 | `.inspect <unit> [ability …]` | any unit as it is now: `inspect id=… type=… owner=p13 at=x,y order=attack life=…/… mana=… dmg=59+1d2 cd=1.50 range=800 armor=2 speed=0`, plus the level of each ability or buff named |
 | `.watch` | from now on, every hit on the player's units: `hit src=… srctype=… dst=… amount=… raw=… atk=pierce attack=true`; `raw` is the amount before the target's armor (as the map's own damage triggers left it) |
 | `.casts` | from now on, every spell the player's units cast: `cast src=… srctype=… ability=A03D dst=…` (dst 0 for no unit) |
