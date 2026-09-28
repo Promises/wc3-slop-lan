@@ -937,6 +937,49 @@ def test_wyvern_lightning(game):
     findings.raise_if_any('Wyvern')
 
 
+# Ice Trolls' Ice Troll Priest -------------------------------------------------------------------------
+
+ICE_TROLLS, ICE_TROLL_BUILDER, ICE_TROLL_PRIEST = 'I00R', 'n014', 'n018'
+# Every 49 ticks a dummy (u008) casts Frost Nova (A08J) on a random live creep within 500 of it
+FROST_NOVA, NOVA_DUMMY = 'A08J', 'u008'
+
+
+def test_ice_troll_priest_frost_nova(game):
+    """Ice Troll Priest: a dummy casts Frost Nova on the creeps near it, again and again, and only
+    on live ones. (The leak it had - a boolexpr a tick, and a list of every creep it had seen that
+    only grew - is not visible from here; this keeps the rewrite working.)"""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, ICE_TROLLS)
+    game.cmd(RED, f'.gold {GOLD}')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
+    game.watch_casts(RED)
+    placed = build_in_red_lane(game, ICE_TROLL_BUILDER, [('Ice Troll Priest', ICE_TROLL_PRIEST)], findings)
+    findings.raise_if_any('building the Ice Troll Priest')
+    spot = placed[0][1]
+    game.wait('the Ice Troll Priest to stand', lambda: any(
+        u['type'] == ICE_TROLL_PRIEST and abs(u['x'] - spot[0]) <= 64 and abs(u['y'] - spot[1]) <= 64
+        for u in game.units(RED)), 60)
+
+    def novas():
+        return [c for c in game.casts() if c['ability'] == FROST_NOVA and c['srctype'] == NOVA_DUMMY]
+
+    # A target that dies, and one that stays: after the first dies, the novas must go to the other
+    doomed = game.create(CREEPS, maul.GROUND_TARGET, spot[0] + 200, spot[1], life=maul.TARGET_LIFE, rooted=True)[0]['id']
+    lasting = game.create(CREEPS, maul.GROUND_TARGET, spot[0] - 200, spot[1], life=maul.TARGET_LIFE, rooted=True)[0]['id']
+    try:
+        game.wait('a Frost Nova', lambda: novas(), 30)
+        game.cmd(CREEPS, f'.kill {doomed}')
+        before = len(novas())
+        game.wait('two more Frost Novas', lambda: len(novas()) >= before + 2, 30)
+        later = novas()[before:]
+        findings.check(all(c['dst'] == lasting for c in later),
+                       f'Frost Nova went to {sorted({c["dst"] for c in later})} after {doomed} died; only {lasting} lives')
+    except TestFailed as error:
+        findings.append(f'stopped: {error}')
+    findings.raise_if_any('Ice Troll Priest')
+
+
 # Behaviours that need kills, time or a running wave, each on a game of its own ------------------
 
 def race_named(name):
