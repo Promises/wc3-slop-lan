@@ -60,6 +60,7 @@ function OrderId2String() return nil end
 local orders = {}
 function IssuePointOrder(u, name, x, y) orders[#orders + 1] = {u.id, name, x, y}; return true end
 function IssueImmediateOrder(u, name) orders[#orders + 1] = {u.id, name}; return true end
+function IssueImmediateOrderById(u, id) orders[#orders + 1] = {u.id, id}; return id == 852600 end
 function IssueTargetOrder(u, name, t) orders[#orders + 1] = {u.id, name, t.id}; return true end
 local ended
 function EndGame(scoreScreen) ended = scoreScreen end
@@ -171,6 +172,11 @@ check('a point order was issued', orders[1] and orders[1][2] == 'move' and order
 check('and traced', find('order p0 1 move 300 400 issued') ~= nil)
 fromHost('0 .build 1 h001 64 128')
 check('a build order was issued', orders[2] and orders[2][3] == 0x68303031)
+fromHost('0 .order 1 #852600')
+check('an order by id is issued by id', orders[#orders][2] == 852600 and find('order p0 1 #852600 issued') ~= nil)
+fromHost('0 .orders 1 852598 852602')
+check('.orders notes the ids a unit takes', find('order p0 orders 1 took 852600') ~= nil and find('order p0 orders 1 took 852599') == nil
+    and find('order p0 orders 1 end') ~= nil)
 fromHost('1 .order 1 stop')
 check("another player's unit refuses", find('order p1 1 stop rejected') ~= nil)
 fromHost('0 .gold 1717')

@@ -228,21 +228,44 @@ do
     end
 
     -- .order <unit> <order> [x y | target]: an order to one of the player's own units
+    -- The order is a name ('stop'), or #<id> for one with no name (a custom ability's base order)
     builtins['.order'] = function(index, words)
         local u = unitByRef(words[2], index)
         local name = words[3]
+        local id = name and tonumber(name:match('^#(%d+)$'))
         local ok = false
         if u and name then
             if #words >= 5 then
-                ok = IssuePointOrder(u, name, tonumber(words[4]), tonumber(words[5]))
+                local x, y = tonumber(words[4]), tonumber(words[5])
+                ok = id and IssuePointOrderById(u, id, x, y) or (not id and IssuePointOrder(u, name, x, y))
             elseif #words == 4 then
                 local target = unitByRef(words[4])
-                ok = target ~= nil and IssueTargetOrder(u, name, target)
+                ok = target ~= nil and (id and IssueTargetOrderById(u, id, target) or (not id and IssueTargetOrder(u, name, target)))
             else
-                ok = IssueImmediateOrder(u, name)
+                ok = id and IssueImmediateOrderById(u, id) or (not id and IssueImmediateOrder(u, name))
             end
         end
         Slop.note('order', 'p' .. index .. ' ' .. table.concat(words, ' ', 2) .. (ok and ' issued' or ' rejected'))
+    end
+
+    -- .orders <unit> <from> <to>: tries every immediate order id in the range on one of the player's
+    -- units, and notes each one it takes ('order p0 orders 12 took 852000 channel'), then the end.
+    -- For finding the order of a custom ability that has no name; the orders taken are carried
+    -- out, so use a unit that may be spent
+    builtins['.orders'] = function(index, words)
+        local u = unitByRef(words[2], index)
+        local from, to = tonumber(words[3]), tonumber(words[4])
+        if u and from and to then
+            for id = from, math.min(to, from + 5000) do
+                if GetUnitTypeId(u) == 0 then
+                    break
+                end
+                if IssueImmediateOrderById(u, id) then
+                    Slop.note('order', 'p' .. index .. ' orders ' .. words[2] .. ' took ' .. id .. ' ' .. tostring(OrderId2String(id)))
+                end
+            end
+        end
+        Slop.note('order', 'p' .. index .. ' orders ' .. tostring(words[2]) .. ' end')
     end
 
     -- .build <builder> <type> <x> <y>: a build order, the type as its four letters
