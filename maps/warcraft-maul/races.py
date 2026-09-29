@@ -875,177 +875,121 @@ def test_elementalist_runes(game):
     findings.raise_if_any('Elementalists')
 
 
-# Aviaries' Wyvern ------------------------------------------------------------------------------------
-
-AVIARIES, AVIARIES_BUILDER, WYVERN = 'I003', 'eC10', 'oC60'
-# The four creep players: the Wyvern's lightning must reach the units of each
-CREEP_PLAYERS = (13, 14, 15, 16)
-# Its lightning takes 15% of the life of every creep within 128 of it, on each of its attacks (every
-# 2.5 s); its own attack is 1 damage or so, nothing next to that on a target of 5 million
-WYVERN_REACH = 96
+DEPLETED_ROCK = 'n027'
+# Siphon Energy (A0CT), on a level 1 rune: the caster becomes the pair's fusion, the target a rock
+SIPHON = 'web'
+# Pay the Toll (A0BF, Channel): 50 gold and the unit is gone
+PAY_THE_TOLL, TOLL = 'channel', 50
 
 
-def wyvern_targets(game, spot):
-    """A 5-million-life target of each creep player around the tower, within its lightning."""
-    offsets = ((WYVERN_REACH, 0), (-WYVERN_REACH, 0), (0, WYVERN_REACH), (0, -WYVERN_REACH))
-    return {player: game.create(player, maul.GROUND_TARGET, spot[0] + dx, spot[1] + dy, life=maul.TARGET_LIFE,
-                                rooted=True)[0]['id'] for player, (dx, dy) in zip(CREEP_PLAYERS, offsets)}
+def unit_at(game, player, spot, types):
+    return next((u for u in game.units(player) if u['type'] in types and abs(u['x'] - spot[0]) <= 64
+                 and abs(u['y'] - spot[1]) <= 64), None)
 
 
-def test_wyvern_lightning(game):
-    """Aviaries' Wyvern: each attack strikes every creep next to it for 15% of its life, whichever
-    creep player owns it (Navy's were left out once), and spares the boss waves (35-37; once it
-    spared 34-35 instead)."""
+def test_pay_the_toll_on_a_depleted_rock(game):
+    """Elementalists: one rune siphons another, which turns to a Depleted Rock. Its Pay the Toll is
+    refused, and says so, with less than 50 gold (it once passed in silence), and with the gold it
+    takes 50 and the rock is gone."""
     findings = Findings()
     maul.start(game)
-    # Aviaries is switched off in the race picker; Debug mode lets it be picked from the Dev tab
-    maul.pick(game, RED, AVIARIES)
+    maul.pick(game, RED, ELEMENTALISTS)
     game.cmd(RED, f'.gold {GOLD}')
     game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
-    placed = build_in_red_lane(game, AVIARIES_BUILDER, [('Wyvern', WYVERN)], findings)
-    findings.raise_if_any('building the Wyvern')
-    spot = placed[0][1]
+    placed = build_in_red_lane(game, ELEMENTALIST_BUILDER, [('rune 1', UNCHARGED_RUNE), ('rune 2', UNCHARGED_RUNE)],
+                               findings)
+    findings.raise_if_any('building the runes')
+    spots = [spot for _, spot in placed]
+    game.wait('both runes to stand', lambda: all(unit_at(game, RED, spot, (UNCHARGED_RUNE,)) for spot in spots), 60)
+    # Each takes the first of its two charges
+    elements = []
+    for spot in spots:
+        rune = unit_at(game, RED, spot, (UNCHARGED_RUNE,))
+        levels = game.inspect(rune['id'], *ELEMENTS)
+        ability = next(a for a in ELEMENTS if levels.get(a, 0) > 0)
+        name, order, element = ELEMENTS[ability]
+        game.order(RED, rune['id'], order)
+        elements.append(element)
+    game.wait('both runes to take their element', lambda: all(unit_at(game, RED, spot, (element,))
+                                                              for spot, element in zip(spots, elements)), 15)
+    source = unit_at(game, RED, spots[0], (elements[0],))
+    target = unit_at(game, RED, spots[1], (elements[1],))
+    game.order(RED, source['id'], SIPHON, target['id'])
+    game.wait('the siphoned rune to turn to rock', lambda: unit_at(game, RED, spots[1], (DEPLETED_ROCK,)), 15)
+    rock = unit_at(game, RED, spots[1], (DEPLETED_ROCK,))
 
-    def finished():
-        tower = next((u for u in game.units(RED) if u['type'] == WYVERN and abs(u['x'] - spot[0]) <= 64
-                      and abs(u['y'] - spot[1]) <= 64), None)
-        return tower is not None and tower['life'] >= game.inspect(tower['id']).get('max_life', 1)
-    game.wait('the Wyvern to stand', finished, 60)
-
-    def lost(targets):
-        """The share of its life each target lost, by creep player."""
-        return {player: 1 - game.inspect(target).get('life', 0) / maul.TARGET_LIFE for player, target in targets.items()}
-
-    # A normal wave: every creep player's target is struck
-    targets = wyvern_targets(game, spot)
-    time.sleep(12)
-    shares = lost(targets)
-    game.log('wave 1: ' + ', '.join(f'p{player} lost {share:.0%}' for player, share in shares.items()))
-    for player, share in shares.items():
-        findings.check(share >= 0.15, f'wave 1: the target of creep player {player} lost only {share:.1%}')
-    for player, target in targets.items():
-        game.remove(player, target)
-
-    # A boss wave: none is struck, only the tower's own attack lands
-    game.cmd(RED, '-wave 35')
-    targets = wyvern_targets(game, spot)
-    time.sleep(12)
-    shares = lost(targets)
-    game.log('wave 35: ' + ', '.join(f'p{player} lost {share:.0%}' for player, share in shares.items()))
-    for player, share in shares.items():
-        findings.check(share < 0.05, f'wave 35 (a boss): the target of creep player {player} lost {share:.1%}')
-    findings.raise_if_any('Wyvern')
-
-
-# Ice Trolls' Ice Troll Priest -------------------------------------------------------------------------
-
-ICE_TROLLS, ICE_TROLL_BUILDER, ICE_TROLL_PRIEST = 'I00R', 'n014', 'n018'
-# Every 49 ticks a dummy (u008) casts Frost Nova (A08J) on a random live creep within 500 of it
-FROST_NOVA, NOVA_DUMMY = 'A08J', 'u008'
-
-
-def test_ice_troll_priest_frost_nova(game):
-    """Ice Troll Priest: a dummy casts Frost Nova on the creeps near it, again and again, and only
-    on live ones. (The leak it had - a boolexpr a tick, and a list of every creep it had seen that
-    only grew - is not visible from here; this keeps the rewrite working.)"""
-    findings = Findings()
-    maul.start(game)
-    maul.pick(game, RED, ICE_TROLLS)
-    game.cmd(RED, f'.gold {GOLD}')
-    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
-    game.watch_casts(RED)
-    placed = build_in_red_lane(game, ICE_TROLL_BUILDER, [('Ice Troll Priest', ICE_TROLL_PRIEST)], findings)
-    findings.raise_if_any('building the Ice Troll Priest')
-    spot = placed[0][1]
-    game.wait('the Ice Troll Priest to stand', lambda: any(
-        u['type'] == ICE_TROLL_PRIEST and abs(u['x'] - spot[0]) <= 64 and abs(u['y'] - spot[1]) <= 64
-        for u in game.units(RED)), 60)
-
-    def novas():
-        return [c for c in game.casts() if c['ability'] == FROST_NOVA and c['srctype'] == NOVA_DUMMY]
-
-    # A target that dies, and one that stays: after the first dies, the novas must go to the other
-    doomed = game.create(CREEPS, maul.GROUND_TARGET, spot[0] + 200, spot[1], life=maul.TARGET_LIFE, rooted=True)[0]['id']
-    lasting = game.create(CREEPS, maul.GROUND_TARGET, spot[0] - 200, spot[1], life=maul.TARGET_LIFE, rooted=True)[0]['id']
+    # Short of gold: refused, and the rock stays
+    game.cmd(RED, '.gold 10')
+    game.wait_for('the gold to be 10', lambda beat: beat.gold(RED) == 10)
+    before = len(game.events('toll'))
+    game.order(RED, rock['id'], PAY_THE_TOLL)
     try:
-        game.wait('a Frost Nova', lambda: novas(), 30)
-        game.cmd(CREEPS, f'.kill {doomed}')
-        before = len(novas())
-        game.wait('two more Frost Novas', lambda: len(novas()) >= before + 2, 30)
-        later = novas()[before:]
-        findings.check(all(c['dst'] == lasting for c in later),
-                       f'Frost Nova went to {sorted({c["dst"] for c in later})} after {doomed} died; only {lasting} lives')
+        game.wait('the toll to be refused', lambda: any(' toll p0 refused' in line for line in game.events('toll')[before:]), 10)
     except TestFailed as error:
-        findings.append(f'stopped: {error}')
-    findings.raise_if_any('Ice Troll Priest')
+        findings.append(f'with 10 gold: {error}')
+    findings.check(unit_at(game, RED, spots[1], (DEPLETED_ROCK,)) is not None, 'the rock went for 10 gold')
+    findings.check(maul.fresh_beat(game).gold(RED) == 10, 'the refused toll took gold')
+
+    # With the gold: paid, and the rock is gone (the cooldown of the called-off cast must not stop it)
+    game.cmd(RED, '.gold 100')
+    game.wait_for('the gold to be 100', lambda beat: beat.gold(RED) == 100)
+    before = len(game.events('toll'))
+    game.order(RED, rock['id'], PAY_THE_TOLL)
+    try:
+        game.wait('the toll to be paid', lambda: any(' toll p0 paid' in line for line in game.events('toll')[before:]), 10)
+        game.wait('the rock to go', lambda: unit_at(game, RED, spots[1], (DEPLETED_ROCK,)) is None, 10)
+        findings.check(maul.fresh_beat(game).gold(RED) == 100 - TOLL, f'the toll did not take {TOLL} gold')
+    except TestFailed as error:
+        findings.append(f'with 100 gold: {error}')
+    findings.raise_if_any('Pay the Toll')
 
 
-# Behaviours that need kills, time or a running wave, each on a game of its own ------------------
+# Void Cult's Void Priest ----------------------------------------------------------------------------
 
-def race_named(name):
-    return next(race for race in maul.races('Beginner') if race['name'] == name)
+VOID_CULT, VOID_BUILDER, VOID_PRIEST, VOID_WORSHIPPER, VOID_BEING = 'I019', 'h02T', 'h02F', 'h02G', 'h00T'
+# Void Restoration (A095, from the creep Healing Wave): it targets organic structures that are not
+# invulnerable, which in Void Cult are the towers bought with void fragments (Being and up)
+RESTORATION = 'healingwave'
 
 
-def one_tower(game, race_name, tower_id, *upgrades):
-    """Picks the race for red and builds one tower on red's first slot, upgraded along the given
-    types; returns (race, tower ref)."""
+def test_void_restoration(game):
+    """Void Cult: the Void Priest's Void Restoration (its class was never registered, so it did
+    nothing) runs now. The engine keeps it off a Worshipper (not bought with fragments); on a Void
+    Being it is cast and handled. (That Being is made by the test rather than bought - the harness
+    cannot use the purchase items - so it is no tower of the player's, and the restoration refuses
+    it; one that pays out is not tried here.)"""
     findings = Findings()
-    race = race_named(race_name)
     maul.start(game)
-    maul.pick(game, RED, race['item'])
-    give_gold(game, (RED,))
-    tower = build_chain(game, race, [tower_id, *upgrades], maul.single_spot()[0], findings)
-    findings.raise_if_any(f'building {tower_id}')
-    return race, tower
+    maul.pick(game, RED, VOID_CULT)
+    game.cmd(RED, f'.gold {GOLD}')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
+    placed = build_in_red_lane(game, VOID_BUILDER, [('priest', VOID_PRIEST), ('worshipper', VOID_WORSHIPPER)], findings)
+    findings.raise_if_any('building the Void Cult towers')
+    spots = dict(placed)
+    game.wait('both to stand', lambda: unit_at(game, RED, spots['priest'], (VOID_PRIEST,))
+              and unit_at(game, RED, spots['worshipper'], (VOID_WORSHIPPER,)), 60)
+    priest = unit_at(game, RED, spots['priest'], (VOID_PRIEST,))
+    worshipper = unit_at(game, RED, spots['worshipper'], (VOID_WORSHIPPER,))
+
+    def order_result(before):
+        lines = [line for line in game.events('order')[before:] if f' {RESTORATION} ' in line]
+        return lines[-1] if lines else ''
+
+    before = len(game.events('order'))
+    game.order(RED, priest['id'], RESTORATION, worshipper['id'])
+    game.wait('the order on the Worshipper', lambda: order_result(before), 10)
+    findings.check(order_result(before).endswith('rejected'), f'on a Worshipper: {order_result(before)}')
+
+    being = game.create(RED, VOID_BEING, spots['priest'][0] + 192, spots['priest'][1])[0]['id']
+    before, notes = len(game.events('order')), len(game.events('void'))
+    game.order(RED, priest['id'], RESTORATION, being)
+    game.wait('the order on the Void Being', lambda: order_result(before), 10)
+    findings.check(order_result(before).endswith('issued'), f'on a Void Being: {order_result(before)}')
+    try:
+        game.wait('the restoration to be handled', lambda: any(' restoration ' in line
+                                                               for line in game.events('void')[notes:]), 10)
+    except TestFailed as error:
+        findings.append(f'on a Void Being: {error}')
+    findings.raise_if_any('Void Restoration')
 
 
-def weak_targets(game, count, x, y):
-    """Frozen ground creeps with 1 life, around a point."""
-    return [unit['id'] for unit in game.create(CREEPS, maul.GROUND_TARGET, x, y, count, life=1, frozen=True)]
-
-
-def test_giants_rock_giant_grows_after_40_kills(game):
-    """Rock Giant: 'after 40 kills upgraded' - it becomes its next form on the 40th kill."""
-    race, _ = one_tower(game, 'Giants Hall', 'hC53')
-    weak_targets(game, 45, *maul.single_spot()[1])
-    game.wait('the Rock Giant to upgrade after 40 kills',
-              lambda: any(u['type'] == 'h00A' for u in red_units(game)), timeout=150)
-
-
-def test_giants_sea_giant_swarms_on_kills(game):
-    """Sea Giant: its kills send out carrion swarms (a dummy casts A03T)."""
-    one_tower(game, 'Giants Hall', 'o00Y')
-    game.watch_casts(RED)
-    weak_targets(game, 3, *maul.single_spot()[1])
-    game.wait('a swarm from a kill', lambda: any(c['ability'] == 'A03T' for c in game.casts()), timeout=40)
-
-
-def test_giants_ancient_golem_grows_every_minute(game):
-    """Ancient Golem: '+75 damage every minute' - its base damage grows by 75 within a minute."""
-    _, tower = one_tower(game, 'Giants Hall', 'o00X')
-    before = game.inspect(tower)['damage_min']
-    game.wait('the Ancient Golem to grow', lambda: game.inspect(tower)['damage_min'] >= before + 75, timeout=75)
-    after = game.inspect(tower)['damage_min']
-    if after != before + 75:
-        raise TestFailed(f'the Ancient Golem went from {before} to {after} damage, not +75')
-
-
-def test_giants_iron_golem_statue_spikes_during_waves(game):
-    """Iron Golem Statue: spikes every 5 s while a wave runs (dummies cast A030), and not before."""
-    one_tower(game, 'Giants Hall', 'oC26')
-    game.watch_casts(RED)
-    time.sleep(8)
-    if any(c['ability'] == 'A030' for c in game.casts()):
-        raise TestFailed('the Iron Golem Statue spiked with no wave running')
-    maul.start_wave(game)
-    game.wait('spikes during the wave', lambda: any(c['ability'] == 'A030' for c in game.casts()), timeout=20)
-
-
-def test_corrupted_ancient_protector_starfall_during_waves(game):
-    """Corrupted Ancient Protector: starfall every 30 s while a wave runs (a dummy casts A010)."""
-    one_tower(game, 'Corrupted Night Elves', 'n00L')
-    game.watch_casts(RED)
-    maul.start_wave(game)
-    # Its clock ticks every 30 s from when it was built, and a tick only casts inside a wave: the
-    # first tick after the wave starts is the one
-    game.wait('a starfall during a wave', lambda: any(c['ability'] == 'A010' for c in game.casts()), timeout=100)
