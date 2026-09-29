@@ -15,7 +15,7 @@ import maul
 from builds import race_named
 from maul import CREEPS, RED
 from races import (DEPLETED_ROCK, ELEMENTALIST_BUILDER, ELEMENTS, Findings, SIPHON, UNCHARGED_RUNE, build_chain,
-                   build_in_red_lane, give_gold, unit_at)
+                   build_in_red_lane, give_gold, red_lane_spots, unit_at)
 from slop import TestFailed, trace
 
 # Other races' finishers, by the race that builds them and their name
@@ -589,3 +589,133 @@ def test_ascension(game):
     rows = measure(game, {eye: f'Eye of the Storm ({EYE_OF_THE_STORM}) 2 waves after'}, 'ascension')
     findings.check(rows and rows[0][5] > 0, 'the Eye of the Storm never hit')
     findings.raise_if_any('Ascension')
+
+
+
+# What the game lets a map change on a unit while it plays: the question for fusions generated
+# from their ingredients, rather than one unit type each. A plain ranged tower (an Arrow Tower:
+# missile, pierce, range 900, 1 s) is changed one property at a time with the library's .lua,
+# and what it then does is watched: each probe notes the value read back and what its hits show.
+# The tower is kept in a Lua global (T) so each line stays well under a sync message's 255 bytes.
+PROBE_TOWER, AIR_ONLY_TOWER, WEAPONLESS, MULTI_ATTACK = 'h042', 'h00L', 'hC66', 'A0E4'
+PROBE_SECONDS = 6
+
+
+def test_runtime_fields(game):
+    """Which unit, weapon and ability properties take effect when changed during a game."""
+    maul.start(game)
+    give_gold(game, (RED,))
+    game.watch(CREEPS)
+    spot = red_lane_spots()[5]
+    tower = game.create(RED, PROBE_TOWER, *spot)[0]['id']
+    dalaran = game.create(RED, AIR_ONLY_TOWER, spot[0] + 1500, spot[1])[0]['id']
+    near = place_target(game, spot, 1, 900, False)
+    report = []
+
+    def lua(code):
+        if len(code) > 200:
+            raise TestFailed(f'a .lua line of {len(code)} characters: {code}')
+        before = len(game.events('lua'))
+        game.cmd(RED, '.lua ' + code)
+        game.wait('the line to run', lambda: any(' lua ok' in line or ' lua error' in line for line in game.events('lua')[before:]), 15)
+        return [line.split(' lua ', 1)[1] for line in game.events('lua')[before:]][-1]
+
+    def watch(seconds=PROBE_SECONDS):
+        """The tower's hits over the next seconds: [(tick, fields)]."""
+        start = len(game.events('hit'))
+        time.sleep(seconds)
+        return [(tick_of(line), trace.parse_fields(line)) for line in game.events('hit')[start:] if f' src={tower} ' in line]
+
+    def summary(hits):
+        attacks = [t for t, f in hits if f.get('attack') == 'true']
+        rate = (len(attacks) - 1) / max((attacks[-1] - attacks[0]) * TICK, TICK) if len(attacks) > 1 else 0
+        targets = {}
+        for t, f in hits:
+            targets.setdefault(t, set()).add(f.get('dst'))
+        return (f'{len(hits)} hits, {rate:.2f} attacks/s, raw {sorted({f.get("raw") for _, f in hits})[:3]}, '
+                f'atk {sorted({str(f.get("atk")) for _, f in hits})}, most targets in a tick {max(map(len, targets.values()), default=0)}')
+
+    def probe(name, *lines, evidence=None):
+        read = [lua(line) for line in lines][-1]
+        seen = (evidence or (lambda: summary(watch())))()
+        report.append((name, read, seen))
+        game.log(f'{name}: read back {read}; {seen}')
+
+    lua(f'_G.T = unit({tower}) _G.D = unit({dalaran}) return T ~= nil and D ~= nil')
+    report.append(('(before)', '', summary(watch())))
+
+    probe('base damage 500', 'BlzSetUnitBaseDamage(T, 500, 0) return BlzGetUnitBaseDamage(T, 0)')
+    probe('cooldown 0.3', 'BlzSetUnitAttackCooldown(T, 0.3, 0) return BlzGetUnitAttackCooldown(T, 0)')
+    probe('attack type 5 (weapon field)', 'BlzSetUnitWeaponIntegerField(T, UNIT_WEAPON_IF_ATTACK_ATTACK_TYPE, 0, 5) '
+          'return BlzGetUnitWeaponIntegerField(T, UNIT_WEAPON_IF_ATTACK_ATTACK_TYPE, 0)')
+    probe('projectile art (Farseer)', 'local f = UNIT_WEAPON_SF_ATTACK_PROJECTILE_ART '
+          'BlzSetUnitWeaponStringField(T, f, 0, "Abilities\\\\Weapons\\\\FarseerMissile\\\\FarseerMissile.mdl") '
+          'return BlzGetUnitWeaponStringField(T, f, 0)')
+    probe('projectile speed 300', 'local f = UNIT_WEAPON_RF_ATTACK_PROJECTILE_SPEED BlzSetUnitWeaponRealField(T, f, 0, 300) '
+          'return BlzGetUnitWeaponRealField(T, f, 0)')
+    probe(f'skin ({AIR_ONLY_TOWER})', f'BlzSetUnitSkin(T, FourCC("{AIR_ONLY_TOWER}")) '
+          'local i = GetUnitTypeId(T) return BlzGetUnitSkin(T) .. " type " .. i')
+    probe('name, scale 1.6, colour red', 'BlzSetUnitName(T, "Probe") SetUnitScale(T, 1.6, 1.6, 1.6) '
+          'SetUnitVertexColor(T, 255, 60, 60, 255) return GetUnitName(T)')
+    try:
+        game.log(f'the look: {game.screenshot()}')
+    except TestFailed as problem:
+        game.log(f'no screenshot: {problem}')
+
+    # Range: the near target goes, one stands beyond 900; the range and acquisition are raised
+    game.remove(CREEPS, near)
+    far = game.create(CREEPS, maul.GROUND_TARGET, spot[0], spot[1] + 1400, life=TARGET_LIFE, rooted=True)[0]['id']
+    probe('range as built, target 1,400 away', 'return BlzGetUnitWeaponRealField(T, UNIT_WEAPON_RF_ATTACK_RANGE, 0)')
+    probe('range 1,800 (index 0) + acquisition', 'local f = UNIT_WEAPON_RF_ATTACK_RANGE BlzSetUnitWeaponRealField(T, f, 0, 1800) '
+          'SetUnitAcquireRange(T, 1800) return BlzGetUnitWeaponRealField(T, f, 0)')
+    probe('range 1,800 (index 1)', 'local f = UNIT_WEAPON_RF_ATTACK_RANGE BlzSetUnitWeaponRealField(T, f, 1, 1800) '
+          'return BlzGetUnitWeaponRealField(T, f, 1) .. " / 0: " .. BlzGetUnitWeaponRealField(T, f, 0)')
+    game.remove(CREEPS, far)
+
+    # Targets allowed: the Dalaran's value (air only) onto the tower, with a ground and an air target
+    ground = place_target(game, spot, 1, 900, False)
+    air = place_target(game, spot, -1, 900, True)
+
+    def by_kind():
+        hits = watch()
+        return (f'{sum(1 for _, f in hits if f.get("dst") == ground)} on ground, '
+                f'{sum(1 for _, f in hits if f.get("dst") == air)} on air')
+    probe('both targets, allowed as built', 'return BlzGetUnitWeaponIntegerField(T, UNIT_WEAPON_IF_ATTACK_TARGETS_ALLOWED, 0)',
+          evidence=by_kind)
+    probe('allowed: the Dalaran\'s (air only)', '_G.A = BlzGetUnitWeaponIntegerField(T, UNIT_WEAPON_IF_ATTACK_TARGETS_ALLOWED, 0) return A',
+          'local f = UNIT_WEAPON_IF_ATTACK_TARGETS_ALLOWED BlzSetUnitWeaponIntegerField(T, f, 0, BlzGetUnitWeaponIntegerField(D, f, 0)) '
+          'return BlzGetUnitWeaponIntegerField(T, f, 0)', evidence=by_kind)
+    probe('allowed: back', 'local f = UNIT_WEAPON_IF_ATTACK_TARGETS_ALLOWED BlzSetUnitWeaponIntegerField(T, f, 0, A) '
+          'return BlzGetUnitWeaponIntegerField(T, f, 0)', evidence=by_kind)
+
+    # An ability added, and one of its fields changed: Sandstorm's Multi-Attack (Barrage)
+    for dx in (-144, -96, -48, 48, 96, 144):
+        game.create(CREEPS, maul.GROUND_TARGET, spot[0] + dx, spot[1] + 160, life=TARGET_LIFE, rooted=True)
+    probe('seven targets, no Multi-Attack', f'return GetUnitAbilityLevel(T, FourCC("{MULTI_ATTACK}"))')
+    probe('Multi-Attack added', f'return UnitAddAbility(T, FourCC("{MULTI_ATTACK}"))')
+    probe('its targets field -> 2', f'_G.M = BlzGetUnitAbility(T, FourCC("{MULTI_ATTACK}")) return M ~= nil',
+          'local f = ABILITY_ILF_MAXIMUM_NUMBER_OF_TARGETS_EFK3 BlzSetAbilityIntegerLevelField(M, f, 0, 2) '
+          'return BlzGetAbilityIntegerLevelField(M, f, 0)')
+    probe('ability tooltip on this unit\'s ability', f'local a = FourCC("{MULTI_ATTACK}") BlzSetAbilityTooltip(a, "Probe tip", 0) '
+          'return BlzGetAbilityTooltip(a, 0)', evidence=lambda: '')
+    probe('attacks off', 'BlzSetUnitWeaponBooleanField(T, UNIT_WEAPON_BF_ATTACKS_ENABLED, 0, false) '
+          'return BlzGetUnitWeaponBooleanField(T, UNIT_WEAPON_BF_ATTACKS_ENABLED, 0)')
+
+    # A tower with no weapon in its data (the Human Tower shell): switching one on
+    shell_spot = red_lane_spots()[9]
+    shell = game.create(RED, WEAPONLESS, *shell_spot)[0]['id']
+    place_target(game, shell_spot, 1, 900, False)
+
+    def shell_hits():
+        start = len(game.events('hit'))
+        time.sleep(PROBE_SECONDS)
+        return f"{sum(1 for line in game.events('hit')[start:] if f' src={shell} ' in line)} hits"
+    probe('weaponless: attacks on, damage, cooldown, range', f'_G.S = unit({shell}) BlzSetUnitWeaponBooleanField(S, UNIT_WEAPON_BF_ATTACKS_ENABLED, 0, true) '
+          'return BlzGetUnitWeaponBooleanField(S, UNIT_WEAPON_BF_ATTACKS_ENABLED, 0)',
+          'BlzSetUnitBaseDamage(S, 100, 0) BlzSetUnitAttackCooldown(S, 1, 0) '
+          'BlzSetUnitWeaponRealField(S, UNIT_WEAPON_RF_ATTACK_RANGE, 0, 900) return BlzGetUnitBaseDamage(S, 0)',
+          evidence=shell_hits)
+
+    path = game.artifacts / 'runtime-fields.txt'
+    path.write_text(''.join(f'{name}\n  read back: {read}\n  seen: {seen}\n' for name, read, seen in report))
+    game.log(f'report: {path}')
