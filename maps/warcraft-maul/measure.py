@@ -326,8 +326,9 @@ def test_measure_elementalist_combinations(game):
     findings.raise_if_any('measuring the Elementalist combinations')
 
 
-# The Lich (the Elementalist redesign's first Primal): Undead L2 + Death Rune L3, for 250 gold
-LICH, LICH_FEE, DEATH_3, UNDEAD = 'uP01', 250, LEVEL_3['Death'], 'n026'
+# The Lich (the Elementalist redesign's first Primal): Undead L2 + Death Rune L3, for 250 gold; it
+# gains LICH_GROWTH a wave
+LICH, LICH_FEE, LICH_GROWTH, DEATH_3, UNDEAD = 'uP01', 250, 100, LEVEL_3['Death'], 'n026'
 UNDEAD_UPGRADE = 'neutralspell'
 
 
@@ -338,7 +339,7 @@ def damage(game, unit_id):
 def test_lich(game):
     """The Lich prototype: Undead L2 gains 15 a round; Siphon onto a Death Rune L3 is refused below
     its 250 gold fee; with the gold it makes a Lich that keeps all of Undead's damage, and the Lich
-    then gains at least 25 a round. Then its damage per second."""
+    then gains at least LICH_GROWTH a round. Then its damage per second."""
     findings = Findings()
     maul.start(game)
     maul.pick(game, RED, 'I024')
@@ -411,10 +412,113 @@ def test_lich(game):
         play_round(game)
         lich_grown.append(damage(game, lich))
     game.log(f'Undead L2 {kept} became a Lich with {made}; by round: {lich_grown}')
-    findings.check(all(b - a >= 25 for a, b in zip(lich_grown, lich_grown[1:])), f'the Lich did not gain 25 a round: {lich_grown}')
+    findings.check(all(b - a >= LICH_GROWTH for a, b in zip(lich_grown, lich_grown[1:])),
+                   f'the Lich did not gain {LICH_GROWTH} a round: {lich_grown}')
 
     unit = next(u for u in game.units(RED) if u['id'] == lich)
     place_target(game, (unit['x'], unit['y']), 1, 600, False)
     rows = measure(game, {lich: f'Lich ({LICH}) after 5 rounds'}, 'lich')
     findings.check(rows and rows[0][5] > 0, 'the Lich never hit')
     findings.raise_if_any('the Lich')
+
+
+# Thunderhead: Air Rune L3 + Water Rune L3, 600 gold, one per player, air only
+THUNDERHEAD, THUNDERHEAD_FEE = 'uP02', 600
+
+
+def rune_pairs(game, needs, count):
+    """Builds `count` runes and makes a pair of runes for each need ([element, element]) the rolls
+    allow, charged: {need index: (source spot, target spot)}."""
+    findings = Findings()
+    placed = build_in_red_lane(game, ELEMENTALIST_BUILDER, [(f'rune {n + 1}', UNCHARGED_RUNE) for n in range(count)],
+                               findings)
+    findings.raise_if_any('building the runes')
+    spots = [spot for _, spot in placed]
+    game.wait('the runes to stand', lambda: all(unit_at(game, RED, spot, (UNCHARGED_RUNE,)) for spot in spots), 120)
+    offers = {}
+    for spot in spots:
+        levels = game.inspect(unit_at(game, RED, spot, (UNCHARGED_RUNE,))['id'], *ELEMENTS)
+        offers[spot] = [ELEMENTS[a][0] for a in ELEMENTS if levels.get(a, 0) > 0]
+    met = assign_runes(offers, needs)
+    by_name = {name: (order, element) for name, order, element in ELEMENTS.values()}
+    charged = {spot: element for i, two in met.items() for spot, element in zip(two, needs[i])}
+    for spot, element in charged.items():
+        game.order(RED, unit_at(game, RED, spot, (UNCHARGED_RUNE,))['id'], by_name[element][0])
+    game.wait('the runes to take their element', lambda: all(unit_at(game, RED, spot, (by_name[element][1],))
+                                                             for spot, element in charged.items()), 20)
+    return met
+
+
+def level_3(game, element, pair):
+    """A pair of charged runes of an element siphoned into its Level 2 and bought up to Level 3, on
+    the pair's first spot."""
+    rune = {name: element_type for name, _, element_type in ELEMENTS.values()}[element]
+    source, target = (unit_at(game, RED, spot, (rune,)) for spot in pair)
+    game.order(RED, source['id'], SIPHON, target['id'])
+    game.wait(f'the {element} Rune L2', lambda: unit_at(game, RED, pair[0], (LEVEL_2[element],)), 20)
+    game.upgrade(RED, unit_at(game, RED, pair[0], (LEVEL_2[element],))['id'], LEVEL_3[element])
+    game.wait(f'the {element} Rune L3', lambda: unit_at(game, RED, pair[0], (LEVEL_3[element],)), 60)
+    return unit_at(game, RED, pair[0], (LEVEL_3[element],))
+
+
+def test_thunderhead(game):
+    """Thunderhead: Air Rune L3 siphons a Water Rune L3 - refused below its 600 gold fee, made with
+    it; a second one is refused (one per player); it attacks air and never ground. Then its damage
+    per second against air."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, 'I024')
+    give_gold(game, (RED,))
+    game.watch(CREEPS)
+    needs = [['Air', 'Air'], ['Water', 'Water'], ['Air', 'Air'], ['Water', 'Water']]
+    met = rune_pairs(game, needs, 26)
+    if 0 not in met or 1 not in met:
+        raise TestFailed('the runes rolled no two Air and two Water')
+    air, water = level_3(game, 'Air', met[0]), level_3(game, 'Water', met[1])
+
+    def fuse(source, target):
+        game.order(RED, source['id'], SIPHON, target['id'])
+
+    def refused(before):
+        return any(' siphon p0 refused' in line for line in game.events('siphon')[before:])
+
+    game.cmd(RED, '.gold 100')
+    game.wait_for('the gold to be 100', lambda beat: beat.gold(RED) == 100)
+    before = len(game.events('siphon'))
+    fuse(air, water)
+    try:
+        game.wait('the fusion to be refused', lambda: refused(before), 10)
+    except TestFailed as error:
+        findings.append(f'with 100 gold: {error}')
+
+    game.cmd(RED, '.gold 10000')
+    game.wait_for('the gold to be 10000', lambda beat: beat.gold(RED) == 10000)
+    fuse(air, water)
+    game.wait('the Thunderhead', lambda: unit_at(game, RED, met[0][0], (THUNDERHEAD,)), 15)
+    findings.check(maul.fresh_beat(game).gold(RED) == 10000 - THUNDERHEAD_FEE, f'the fusion did not take {THUNDERHEAD_FEE} gold')
+    thunderhead = unit_at(game, RED, met[0][0], (THUNDERHEAD,))
+
+    # A second: refused, one per player
+    if 2 in met and 3 in met:
+        air_2, water_2 = level_3(game, 'Air', met[2]), level_3(game, 'Water', met[3])
+        before = len(game.events('siphon'))
+        fuse(air_2, water_2)
+        try:
+            game.wait('the second to be refused', lambda: refused(before), 10)
+        except TestFailed as error:
+            findings.append(f'a second Thunderhead: {error}')
+        findings.check(unit_at(game, RED, met[2][0], (THUNDERHEAD,)) is None, 'a second Thunderhead was made')
+    else:
+        game.log('the runes rolled no second Air and Water pair; the one-per-player limit is not tried')
+
+    # Air only: a ground target next to it is never hit
+    ground = place_target(game, (thunderhead['x'], thunderhead['y']), -1, 128, False)
+    place_target(game, (thunderhead['x'], thunderhead['y']), 1, 1000, True)
+    before = len(game.events('hit'))
+    rows = measure(game, {thunderhead['id']: f'Thunderhead ({THUNDERHEAD})'}, 'thunderhead')
+    # Its own hits: the Level 3 runes of a refused second pair still stand nearby, and do hit ground
+    hits_on_ground = [line for line in game.events('hit')[before:]
+                      if f' src={thunderhead["id"]} ' in line and f' dst={ground} ' in line]
+    findings.check(not hits_on_ground, f'Thunderhead hit a ground target {len(hits_on_ground)} times')
+    findings.check(rows and rows[0][5] > 0, 'Thunderhead never hit')
+    findings.raise_if_any('Thunderhead')
