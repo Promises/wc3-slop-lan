@@ -422,7 +422,7 @@ def test_lich(game):
     findings.raise_if_any('the Lich')
 
 
-# Thunderhead: Air Rune L3 + Water Rune L3, 600 gold, one per player, air only
+# Thunderhead: Air Rune L3 + Water Rune L3, 600 gold, air only
 THUNDERHEAD, THUNDERHEAD_FEE = 'uP02', 600
 
 
@@ -463,15 +463,14 @@ def level_3(game, element, pair):
 
 def test_thunderhead(game):
     """Thunderhead: Air Rune L3 siphons a Water Rune L3 - refused below its 600 gold fee, made with
-    it; a second one is refused (one per player); it attacks air and never ground. Then its damage
-    per second against air."""
+    it; it attacks air and never ground. Then its damage per second against air."""
     findings = Findings()
     maul.start(game)
     maul.pick(game, RED, 'I024')
     give_gold(game, (RED,))
     game.watch(CREEPS)
-    needs = [['Air', 'Air'], ['Water', 'Water'], ['Air', 'Air'], ['Water', 'Water']]
-    met = rune_pairs(game, needs, 26)
+    needs = [['Air', 'Air'], ['Water', 'Water']]
+    met = rune_pairs(game, needs, 16)
     if 0 not in met or 1 not in met:
         raise TestFailed('the runes rolled no two Air and two Water')
     air, water = level_3(game, 'Air', met[0]), level_3(game, 'Water', met[1])
@@ -498,27 +497,95 @@ def test_thunderhead(game):
     findings.check(maul.fresh_beat(game).gold(RED) == 10000 - THUNDERHEAD_FEE, f'the fusion did not take {THUNDERHEAD_FEE} gold')
     thunderhead = unit_at(game, RED, met[0][0], (THUNDERHEAD,))
 
-    # A second: refused, one per player
-    if 2 in met and 3 in met:
-        air_2, water_2 = level_3(game, 'Air', met[2]), level_3(game, 'Water', met[3])
-        before = len(game.events('siphon'))
-        fuse(air_2, water_2)
-        try:
-            game.wait('the second to be refused', lambda: refused(before), 10)
-        except TestFailed as error:
-            findings.append(f'a second Thunderhead: {error}')
-        findings.check(unit_at(game, RED, met[2][0], (THUNDERHEAD,)) is None, 'a second Thunderhead was made')
-    else:
-        game.log('the runes rolled no second Air and Water pair; the one-per-player limit is not tried')
-
     # Air only: a ground target next to it is never hit
     ground = place_target(game, (thunderhead['x'], thunderhead['y']), -1, 128, False)
     place_target(game, (thunderhead['x'], thunderhead['y']), 1, 1000, True)
     before = len(game.events('hit'))
     rows = measure(game, {thunderhead['id']: f'Thunderhead ({THUNDERHEAD})'}, 'thunderhead')
-    # Its own hits: the Level 3 runes of a refused second pair still stand nearby, and do hit ground
+    # Its own hits: other towers nearby may hit ground
     hits_on_ground = [line for line in game.events('hit')[before:]
                       if f' src={thunderhead["id"]} ' in line and f' dst={ground} ' in line]
     findings.check(not hits_on_ground, f'Thunderhead hit a ground target {len(hits_on_ground)} times')
     findings.check(rows and rows[0][5] > 0, 'Thunderhead never hit')
     findings.raise_if_any('Thunderhead')
+
+
+# Ascension: a Primal at Attunement 15 ascends for a fee; Surge buys Attunement, 60 a level, 10 at most
+EYE_OF_THE_STORM, EYE_FEE, ASCEND, SURGE, SURGE_PRICE, SURGE_LIMIT = 'uA02', 500, 'avatar', 'berserk', 60, 10
+
+
+def make_thunderhead(game):
+    """A Thunderhead from rune pairs, with the gold for it; its spot."""
+    met = rune_pairs(game, [['Air', 'Air'], ['Water', 'Water']], 16)
+    if 0 not in met or 1 not in met:
+        raise TestFailed('the runes rolled no two Air and two Water')
+    air, water = level_3(game, 'Air', met[0]), level_3(game, 'Water', met[1])
+    game.order(RED, air['id'], SIPHON, water['id'])
+    game.wait('the Thunderhead', lambda: unit_at(game, RED, met[0][0], (THUNDERHEAD,)), 15)
+    return met[0][0]
+
+
+def test_ascension(game):
+    """Surge and Ascend on a Thunderhead: Surge buys 10 levels of Attunement for 60 each and no more;
+    Ascend is refused below Attunement 15; five waves later it ascends to the Eye of the Storm for
+    500, which then gains about 5% of its base damage a wave. Then its damage per second."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, 'I024')
+    give_gold(game, (RED,))
+    game.cmd(RED, '-lives 1000000')
+    game.watch(CREEPS)
+    spot = make_thunderhead(game)
+
+    def notes(kind, since):
+        return [line.split(f' {kind} ', 1)[1] for line in game.events(kind)[since:]]
+
+    # Surge: ten levels, then no more
+    game.cmd(RED, '.gold 10000')
+    game.wait_for('the gold to be 10000', lambda beat: beat.gold(RED) == 10000)
+    before = len(game.events('surge'))
+    for n in range(SURGE_LIMIT + 1):
+        game.order(RED, unit_at(game, RED, spot, (THUNDERHEAD,))['id'], SURGE)
+        game.wait(f'surge {n + 1}', lambda: len(game.events('surge')) > before + n, 10)
+    surges = notes('surge', before)
+    game.log('surge: ' + ' | '.join(surges))
+    findings.check(sum(1 for n in surges if n.startswith('p0 attunement=')) == SURGE_LIMIT,
+                   f'Surge did not buy {SURGE_LIMIT} levels: {surges}')
+    findings.check(surges[-1].startswith('p0 refused'), f'an 11th Surge was not refused: {surges[-1]}')
+    findings.check(maul.fresh_beat(game).gold(RED) == 10000 - SURGE_LIMIT * SURGE_PRICE,
+                   f'Surge did not take {SURGE_PRICE} a level')
+
+    # Ascend: refused at Attunement 10
+    before = len(game.events('ascend'))
+    game.order(RED, unit_at(game, RED, spot, (THUNDERHEAD,))['id'], ASCEND)
+    try:
+        game.wait('the ascension to be refused', lambda: any('refused' in n for n in notes('ascend', before)), 10)
+    except TestFailed as error:
+        findings.append(f'at Attunement 10: {error}')
+
+    # Five waves to Attunement 15, then it ascends
+    for _ in range(5):
+        play_round(game)
+    gold = maul.fresh_beat(game).gold(RED)
+    before = len(game.events('ascend'))
+    game.order(RED, unit_at(game, RED, spot, (THUNDERHEAD,))['id'], ASCEND)
+    try:
+        game.wait('the Eye of the Storm', lambda: unit_at(game, RED, spot, (EYE_OF_THE_STORM,)), 15)
+    except TestFailed as error:
+        findings.append(f'{error}: {notes("ascend", before)}')
+        findings.raise_if_any('Ascension')
+    findings.check(maul.fresh_beat(game).gold(RED) == gold - EYE_FEE, f'Ascension did not take {EYE_FEE} gold')
+    eye = unit_at(game, RED, spot, (EYE_OF_THE_STORM,))['id']
+    grown = [damage(game, eye)]
+    for _ in range(2):
+        play_round(game)
+        grown.append(damage(game, eye))
+    game.log(f'Eye of the Storm damage by wave: {grown}')
+    # 5% of its base (2,050) a wave
+    findings.check(all(b - a >= 100 for a, b in zip(grown, grown[1:])), f'it did not gain about 5% a wave: {grown}')
+
+    unit = next(u for u in game.units(RED) if u['id'] == eye)
+    place_target(game, (unit['x'], unit['y']), 1, 1100, True)
+    rows = measure(game, {eye: f'Eye of the Storm ({EYE_OF_THE_STORM}) 2 waves after'}, 'ascension')
+    findings.check(rows and rows[0][5] > 0, 'the Eye of the Storm never hit')
+    findings.raise_if_any('Ascension')
