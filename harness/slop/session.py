@@ -80,6 +80,10 @@ class Pending:
         return self._result()
 
 
+# The game's settings file in a user folder: window, graphics, and what it has shown already
+PREFERENCES = 'War3Preferences.txt'
+
+
 class Session:
     def __init__(self, config: Config, name='game', log=print):
         self.config = config
@@ -239,6 +243,13 @@ class Session:
         folder.mkdir(parents=True, exist_ok=True)
         # The second client's user folder sees the same map: its Maps/<folder> links to this one
         for client in range(1, config.clients):
+            # And it starts from the first client's preferences when it has none of its own: a game
+            # that is killed never saves them, so it would play the intro movie on every start, and
+            # its menus - the LAN activation among them - wait for the movie
+            preferences = config.data_for(client) / PREFERENCES
+            if not preferences.exists() and (config.data / PREFERENCES).exists():
+                preferences.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(config.data / PREFERENCES, preferences)
             linked = config.data_for(client) / 'Maps' / config.map_folder
             if linked == folder:
                 continue

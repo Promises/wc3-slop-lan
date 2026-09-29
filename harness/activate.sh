@@ -47,8 +47,7 @@ PY
 
 script=$(mktemp -t slop-activate)
 # No breakpoint condition: the call follows mov edi,'LOOP' (checked above), so rdi is always LOOP
-# there. A condition makes lldb evaluate an expression in the game at the stop, the likely cause
-# of the activations that stopped at the breakpoint and never came back (under Rosetta)
+# there, and a condition only costs an expression evaluation in the game at the stop
 cat > "$script" <<LLDB
 breakpoint set --shlib "Warcraft III" --address $SITE --one-shot true
 continue
