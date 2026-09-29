@@ -1,0 +1,21 @@
+# Warcraft Maul, measured: the damage towers really do in a real game (../measure.py), for
+# balancing. Not part of the checks; run it on its own from the repo root:
+#
+#   ./slop -c maps/warcraft-maul/measure/slop.toml test --build
+
+[map]
+file = "${WC3_MAUL:-../../../../wc3-ts-template}/dist/bin/map.w3x"
+folder = "WarcraftMaulDev"
+build = "npm run build:dev"
+build_dir = "${WC3_MAUL:-../../../../wc3-ts-template}"
+
+[host]
+mode = "active"
+seat = 17
+
+[clients]
+count = 2
+names = ["red", "blue"]
+
+[tests]
+file = ["../measure.py"]
