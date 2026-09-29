@@ -145,7 +145,9 @@ if Slop and slot == Slop.seat then -- not a real player: give it no base, no lan
 
 With `seat = "auto"` the seat takes the first slot the map doesn't define, which most maps never
 look at. A map that loops over every slot and sets up whatever is playing should skip it.
-Warcraft Maul does this where it seats its defenders.
+Warcraft Maul does this where it seats its defenders - unless the seat is one of its lanes: then
+the host is one more defender, which tests drive with commands (maps/warcraft-maul/three-players,
+a votekick needing three players).
 
 ## Rules for anything that writes to the trace
 

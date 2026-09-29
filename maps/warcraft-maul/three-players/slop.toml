@@ -1,0 +1,23 @@
+# Warcraft Maul with a third player: the active host is seated in a lane (teal), and the map takes
+# a host in a lane as one more defender, which the tests drive with commands. For what needs three
+# players, such as a votekick by majority. From the repo root:
+#
+#   ./slop -c maps/warcraft-maul/three-players/slop.toml test --build
+
+[map]
+file = "${WC3_MAUL:-../../../../wc3-ts-template}/dist/bin/map.w3x"
+folder = "WarcraftMaulDev"
+build = "npm run build:dev"
+build_dir = "${WC3_MAUL:-../../../../wc3-ts-template}"
+
+[host]
+mode = "active"
+# Teal's lane: a defender like red and blue
+seat = 2
+
+[clients]
+count = 2
+names = ["red", "blue"]
+
+[tests]
+file = ["../three_players.py"]
