@@ -336,6 +336,31 @@ def damage(game, unit_id):
     return game.inspect(unit_id).get('damage_min', 0)
 
 
+def forget_recipes(game):
+    """Empties red's recipe book (the debug command -forget), so a Primal is revealed before it is made."""
+    before = len(game.events('book'))
+    game.cmd(RED, '-forget')
+    game.wait('the recipe book to empty', lambda: any(' book p0 forgot' in line for line in game.events('book')[before:]), 10)
+
+
+def reveal(game, source, target, result, findings):
+    """The first Siphon on an undiscovered Primal's pair: it shows the Primal, and spends nothing."""
+    gold = maul.fresh_beat(game).gold(RED)
+    before = len(game.events('siphon'))
+    game.order(RED, source, SIPHON, target)
+    try:
+        game.wait(f'{result} to be revealed',
+                  lambda: any(f' siphon p0 revealed {result}' in line for line in game.events('siphon')[before:]), 10)
+    except TestFailed as error:
+        findings.append(f'revealing {result}: {error}')
+        return
+    time.sleep(2)
+    findings.check(not any(' siphon p0 made' in line for line in game.events('siphon')[before:]), f'revealing {result} made it')
+    findings.check(maul.fresh_beat(game).gold(RED) == gold, f'revealing {result} spent gold')
+    units = {u['id'] for u in game.units(RED)}
+    findings.check(source in units and target in units, f'revealing {result} used up a tower')
+
+
 def test_lich(game):
     """The Lich prototype: Undead L2 gains 15 a round; Siphon onto a Death Rune L3 is refused below
     its 250 gold fee; with the gold it makes a Lich that keeps all of Undead's damage, and the Lich
@@ -344,6 +369,7 @@ def test_lich(game):
     maul.start(game)
     maul.pick(game, RED, 'I024')
     give_gold(game, (RED,))
+    forget_recipes(game)
     game.cmd(RED, '-lives 1000000')
     game.watch(CREEPS)
     placed = build_in_red_lane(game, ELEMENTALIST_BUILDER, [(f'rune {n + 1}', UNCHARGED_RUNE) for n in range(16)],
@@ -385,9 +411,10 @@ def test_lich(game):
     game.log(f'Undead L2 damage by round: {grown}')
     findings.check(all(b - a >= 15 for a, b in zip(grown, grown[1:])), f'Undead L2 did not gain 15 a round: {grown}')
 
-    # Short of the fee: refused
+    # Short of the fee: the first Siphon reveals the Lich, the next is refused
     game.cmd(RED, '.gold 100')
     game.wait_for('the gold to be 100', lambda beat: beat.gold(RED) == 100)
+    reveal(game, undead, unit_at(game, RED, death_spot, (DEATH_3,))['id'], LICH, findings)
     before = len(game.events('siphon'))
     game.order(RED, undead, SIPHON, unit_at(game, RED, death_spot, (DEATH_3,))['id'])
     try:
@@ -468,6 +495,7 @@ def test_thunderhead(game):
     maul.start(game)
     maul.pick(game, RED, 'I024')
     give_gold(game, (RED,))
+    forget_recipes(game)
     game.watch(CREEPS)
     needs = [['Air', 'Air'], ['Water', 'Water']]
     met = rune_pairs(game, needs, 16)
@@ -483,6 +511,7 @@ def test_thunderhead(game):
 
     game.cmd(RED, '.gold 100')
     game.wait_for('the gold to be 100', lambda beat: beat.gold(RED) == 100)
+    reveal(game, air['id'], water['id'], THUNDERHEAD, findings)
     before = len(game.events('siphon'))
     fuse(air, water)
     try:
@@ -515,11 +544,15 @@ EYE_OF_THE_STORM, EYE_FEE, ASCEND, SURGE, SURGE_PRICE, SURGE_LIMIT = 'uA02', 500
 
 
 def make_thunderhead(game):
-    """A Thunderhead from rune pairs, with the gold for it; its spot."""
+    """A Thunderhead from rune pairs, with the gold for it, revealed first from an empty book; its spot."""
+    forget_recipes(game)
     met = rune_pairs(game, [['Air', 'Air'], ['Water', 'Water']], 16)
     if 0 not in met or 1 not in met:
         raise TestFailed('the runes rolled no two Air and two Water')
     air, water = level_3(game, 'Air', met[0]), level_3(game, 'Water', met[1])
+    findings = Findings()
+    reveal(game, air['id'], water['id'], THUNDERHEAD, findings)
+    findings.raise_if_any('revealing the Thunderhead')
     game.order(RED, air['id'], SIPHON, water['id'])
     game.wait('the Thunderhead', lambda: unit_at(game, RED, met[0][0], (THUNDERHEAD,)), 15)
     return met[0][0]
@@ -719,3 +752,118 @@ def test_runtime_fields(game):
     path = game.artifacts / 'runtime-fields.txt'
     path.write_text(''.join(f'{name}\n  read back: {read}\n  seen: {seen}\n' for name, read, seen in report))
     game.log(f'report: {path}')
+
+
+# The recipe book and its save: a Primal revealed in one game is known in the next
+
+
+def save_files(game, client):
+    return sorted((game.folders[client] / 'WarcraftMaul').glob('save-*.txt'))
+
+
+def loaded(game, player, client, since=0):
+    """The 'save' trace line of a player's save being applied on a client, or None."""
+    return next((line for line in game.events('save', client)[since:] if f' save p{player} loaded ' in line
+                 or f' save p{player} rejected ' in line), None)
+
+
+def book_size(game, player, client):
+    lines = [line for line in game.events('book', client) if f' book p{player} loaded ' in line]
+    return int(lines[-1].rsplit(' ', 1)[1]) if lines else None
+
+
+def elementalist_game(game, name):
+    """A new game with red on the Elementalist."""
+    game.next_game(name)
+    maul.start(game)
+    maul.pick(game, RED, 'I024')
+    give_gold(game, (RED,))
+
+
+def test_recipe_discovery(game):
+    """Discovery and the save: with no save file, red's book starts empty; Siphon on a pair with no
+    recipe says so and hints; the first Siphon on Air L3 + Water L3 reveals the Thunderhead for free,
+    and red's save file is written. The next game loads the save on both clients, and one Siphon
+    makes the Thunderhead. A save edited by hand is rejected, and the book starts empty."""
+    findings = Findings()
+    for client in range(len(game.folders)):
+        for path in save_files(game, client):
+            path.unlink()
+    # A game whose start finds no save file: the first game a player ever plays
+    elementalist_game(game, 'recipe-discovery-first')
+    game.wait('the saves to load', lambda: loaded(game, 0, 0) and loaded(game, 1, 0), 20)
+    # The save format keeps to 32-bit integer operations; which width the game's Lua has, for the log
+    before = len(game.events('lua'))
+    game.cmd(RED, '.lua return math.maxinteger')
+    game.wait('the Lua integer width', lambda: len(game.events('lua')) > before, 10)
+    game.log(f'Lua math.maxinteger: {game.events("lua")[-1].split(" lua ", 1)[1]}')
+    findings.check(book_size(game, 0, 0) == 0, f'red\'s book did not start empty: {book_size(game, 0, 0)}')
+    game.watch(CREEPS)
+    met = rune_pairs(game, [['Air', 'Air'], ['Water', 'Water']], 16)
+    if 0 not in met or 1 not in met:
+        raise TestFailed('the runes rolled no two Air and two Water')
+    air, water = level_3(game, 'Air', met[0]), level_3(game, 'Water', met[1])
+
+    # No recipe: Air L3 onto an uncharged rune; Air L3 goes into the undiscovered Thunderhead
+    spare = next((u for u in game.units(RED) if u['type'] == UNCHARGED_RUNE), None)
+    if spare is None:
+        findings.append('no uncharged rune left to miss with')
+    else:
+        before = len(game.events('siphon'))
+        game.order(RED, air['id'], SIPHON, spare['id'])
+        try:
+            game.wait('the miss', lambda: any(' siphon p0 miss ' in line for line in game.events('siphon')[before:]), 10)
+            miss = next(line for line in game.events('siphon')[before:] if ' siphon p0 miss ' in line)
+            findings.check(f'hint={LEVEL_3["Air"]}' in miss, f'the miss gave no hint about the Air Rune L3: {miss}')
+        except TestFailed as error:
+            findings.append(f'Siphon onto an uncharged rune: {error}')
+
+    reveal(game, air['id'], water['id'], THUNDERHEAD, findings)
+    # The Level 2 runes made on the way are discovered too
+    discovered = [line.rsplit(' ', 1)[1] for line in game.events('book') if ' book p0 discovered ' in line]
+    findings.check(THUNDERHEAD in discovered, f'the reveal did not put the Thunderhead in the book: {discovered}')
+    try:
+        game.wait('red\'s save file', lambda: save_files(game, 0), 10)
+        text = save_files(game, 0)[0].read_text(errors='replace')
+        game.log(f'save file {save_files(game, 0)[0].name}: {len(text)} characters')
+        findings.check('BlzSetAbilityTooltip' in text and THUNDERHEAD not in text, 'the save file is not scrambled save text')
+    except TestFailed as error:
+        findings.append(str(error))
+    findings.check(not save_files(game, 1), 'blue changed nothing, yet has a save file')
+
+    # The next game: the save loads on both clients, and one Siphon makes the Thunderhead
+    elementalist_game(game, 'recipe-discovery-loaded')
+    game.wait('the saves to load', lambda: loaded(game, 0, 0) and loaded(game, 0, 1), 20)
+    for client in range(2):
+        line = loaded(game, 0, client)
+        findings.check(' loaded ' in line and 'sections=1' in line, f'client {client + 1}: red\'s save did not load: {line}')
+        findings.check(book_size(game, 0, client) == len(discovered),
+                       f'client {client + 1}: red\'s book holds {book_size(game, 0, client)}, not {len(discovered)} ({discovered})')
+    game.watch(CREEPS)
+    met = rune_pairs(game, [['Air', 'Air'], ['Water', 'Water']], 16)
+    if 0 in met and 1 in met:
+        air, water = level_3(game, 'Air', met[0]), level_3(game, 'Water', met[1])
+        before = len(game.events('siphon'))
+        game.order(RED, air['id'], SIPHON, water['id'])
+        try:
+            game.wait('the Thunderhead in one Siphon', lambda: unit_at(game, RED, met[0][0], (THUNDERHEAD,)), 15)
+        except TestFailed as error:
+            findings.append(f'with the Thunderhead known: {error}')
+        findings.check(not any(' revealed ' in line for line in game.events('siphon')[before:]), 'a known Primal was revealed again')
+    else:
+        findings.append('the second game\'s runes rolled no two Air and two Water')
+
+    # A save edited by hand: rejected, the book starts empty
+    if not save_files(game, 0):
+        findings.append('red has no save file to edit')
+        findings.raise_if_any('the recipe book')
+    path = save_files(game, 0)[0]
+    text = path.read_text(errors='replace')
+    start = text.index('BlzSetAbilityTooltip(') + len("BlzSetAbilityTooltip('Amls', \"") + 3
+    path.write_text(text[:start] + ('A' if text[start] != 'A' else 'B') + text[start + 1:])
+    elementalist_game(game, 'recipe-discovery-edited')
+    game.wait('the saves to load', lambda: loaded(game, 0, 0), 20)
+    line = loaded(game, 0, 0)
+    findings.check(' rejected signature' in line, f'an edited save was not rejected: {line}')
+    findings.check(book_size(game, 0, 0) == 0, f'after an edited save red\'s book holds {book_size(game, 0, 0)}')
+    findings.raise_if_any('the recipe book')
