@@ -473,6 +473,25 @@ do
         Slop.note('order', 'p' .. index .. ' remove ' .. tostring(words[2]) .. (u and ' done' or ' rejected'))
     end
 
+    -- .lua <code>: runs a line of Lua on every client, in step - a test's probe of what the game
+    -- does (which natives take effect, say). unit(ref) is any unit by its ref, note(text) writes a
+    -- 'lua' trace line, and what the code returns is noted ('ok <value>'), as is an error. Only
+    -- for code every client runs alike: nothing local, or the clients part
+    builtins['.lua'] = function(index, words)
+        local env = setmetatable({
+            unit = function(ref) return unitByRef(ref) end,
+            note = function(text) Slop.note('lua', tostring(text)) end,
+            player = index,
+        }, {__index = _G})
+        local chunk, problem = load(table.concat(words, ' ', 2), '.lua', 't', env)
+        if not chunk then
+            Slop.note('lua', 'error ' .. tostring(problem))
+            return
+        end
+        local ok, result = pcall(chunk)
+        Slop.note('lua', (ok and 'ok ' or 'error ') .. tostring(result))
+    end
+
     -- .tech <tech> <level>: researches an upgrade for the player to that level
     builtins['.tech'] = function(index, words)
         SetPlayerTechResearched(Player(index), fourcc(words[2]), math.tointeger(tonumber(words[3]) or 1) or 1)

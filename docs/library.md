@@ -60,6 +60,7 @@ They start with a dot, so they can't clash with a map's own chat commands.
 | `.order <unit> <order> <target>` | a target order at another unit, by its ref |
 | `.order <unit> #<id> ...` | any of the three by order id, for an order with no name (a custom ability built on one whose base order has none) |
 | `.orders <unit> <from> <to>` | tries every immediate order id in the range on the unit and notes each it takes (`orders <unit> took <id> <name>`), then `orders <unit> end`: how to find such an id. The orders taken are carried out, so use a unit that may be spent |
+| `.lua <code>` | runs a line of Lua on every client in step: `unit(ref)` gives a unit, `note(text)` writes a `lua` trace line, and the result is noted (`lua ok <value>` / `lua error ...`). For probing what the game does; only code every client runs alike |
 | `.build <builder> <type> <x> <y>` | a build order; the type as its four letters |
 | `.gold <n>`, `.lumber <n>`, `.foodcap <n>` | set the player's resources, or food cap |
 | `.create <type> <x> <y> [count] [life=<n>] [frozen] [rooted] [tag=<t>]` | units of that type for the player (a creep player, say): `created p13 id=… type=… at=x,y`; with their life set, and paused (`frozen`) or unable to move while still acting (`rooted`), from the moment they exist. A `tag` is echoed at the end of each unit's line (` tag=<t>`), so several creates under way at once can be told apart |

@@ -177,6 +177,10 @@ check('an order by id is issued by id', orders[#orders][2] == 852600 and find('o
 fromHost('0 .orders 1 852598 852602')
 check('.orders notes the ids a unit takes', find('order p0 orders 1 took 852600') ~= nil and find('order p0 orders 1 took 852599') == nil
     and find('order p0 orders 1 end') ~= nil)
+fromHost('0 .lua note(unit(1) and "found") return 6 * 7')
+check('.lua runs a line, with unit() and note()', find('lua found') ~= nil and find('lua ok 42') ~= nil)
+fromHost('0 .lua return nosuch.field')
+check('.lua notes an error', find('lua error ') ~= nil)
 fromHost('1 .order 1 stop')
 check("another player's unit refuses", find('order p1 1 stop rejected') ~= nil)
 fromHost('0 .gold 1717')
