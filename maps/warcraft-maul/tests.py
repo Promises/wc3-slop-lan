@@ -7,7 +7,7 @@ player, and add lives, wave and creeps to the heartbeat, and kills and towers pe
 import time
 
 import maul
-from maul import RED, sync
+from maul import BLUE, RED, sync
 from slop import TestFailed
 
 # Race shop items (Beginner races); a normal pick costs the starting lumber
@@ -180,3 +180,34 @@ def test_repick_starts_over(game):
     time.sleep(3)
     if not any(u['type'] == HYBRID_BUILDER for u in game.units(RED)):
         raise TestFailed('-repick took the hybrid builder: there is no repick from Hybrid Random')
+
+
+def test_vote_ends_when_everyone_voted(game):
+    """With the choice left to a vote, a vote ends as soon as both players have voted, well before
+    its 10 seconds: first the game mode, then the difficulty."""
+    def decided(what):
+        return [line for line in game.events('vote') if f'{what}=' in line]
+
+    # The host (red) hands the choice to the players once its settings panel is up, and both vote;
+    # a vote sent before the vote opens is dropped, so they are sent again until it is decided
+    started = time.time()
+    while not decided('mode') and time.time() - started < 15:
+        sync(game, RED, 'game-vote')
+        time.sleep(1)
+        sync(game, RED, 'vote-mode:0')
+        sync(game, BLUE, 'vote-mode:0')
+        time.sleep(1)
+    if not decided('mode'):
+        raise TestFailed(f'no game mode was decided in {time.time() - started:.0f}s')
+    if time.time() - started >= 8:
+        raise TestFailed(f'the mode vote took {time.time() - started:.0f}s with both voting at once')
+
+    voted = time.time()
+    sync(game, RED, 'vote-diff:1')
+    sync(game, BLUE, 'vote-diff:1')
+    game.wait('the difficulty vote to end', lambda: decided('difficulty'), 6)
+    line = decided('difficulty')[0]
+    if 'difficulty=200 votes=2' not in line:
+        raise TestFailed(f'the difficulty vote ended with {line.split(" vote ")[1]}; both voted 200%')
+    game.log(f'mode decided within {voted - started:.0f}s of the host leaving it to a vote, difficulty '
+             f'{time.time() - voted:.0f}s after both voted')
