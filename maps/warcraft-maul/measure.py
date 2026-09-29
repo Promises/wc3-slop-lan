@@ -772,6 +772,16 @@ def book_size(game, player, client):
     return int(lines[-1].rsplit(' ', 1)[1]) if lines else None
 
 
+def lua_true(game, code):
+    """Whether a line of Lua returned true. A check of local things (frames) is written as "not the
+    player this is about, or the check", so both clients note the same line when it holds and the
+    clients' traces stay in step."""
+    before = len(game.events('lua'))
+    game.cmd(RED, '.lua ' + code)
+    game.wait('the Lua line', lambda: len(game.events('lua')) > before, 10)
+    return game.events('lua')[before].split(' lua ', 1)[1] == 'ok true'
+
+
 def elementalist_game(game, name):
     """A new game with red on the Elementalist."""
     game.next_game(name)
@@ -839,6 +849,27 @@ def test_recipe_discovery(game):
         findings.check(' loaded ' in line and 'sections=1' in line, f'client {client + 1}: red\'s save did not load: {line}')
         findings.check(book_size(game, 0, client) == len(discovered),
                        f'client {client + 1}: red\'s book holds {book_size(game, 0, client)}, not {len(discovered)} ({discovered})')
+    # The recipe book: its button on red's action bar only, and -book opens it on red's screen only
+    lua_true(game, '_G.F = function(name) return BlzGetFrameByName(name, 0) end return true')
+    findings.check(lua_true(game, 'return GetLocalPlayer() ~= Player(0) or BlzFrameIsVisible(F("recipeBookButton5Well"))'),
+                   'red, an Elementalist, has no recipe book button')
+    findings.check(lua_true(game, 'return GetLocalPlayer() ~= Player(1) or not BlzFrameIsVisible(F("recipeBookButton5Well"))'),
+                   'blue, not an Elementalist, has a recipe book button')
+    game.cmd(RED, '-book')
+    time.sleep(1)
+    findings.check(lua_true(game, 'return GetLocalPlayer() ~= Player(0) or (BlzFrameIsVisible(F("recipeBookPanel")) and '
+                                  'string.find(BlzFrameGetText(F("recipeBookPrimals")), "Thunderhead", 1, true) ~= nil)'),
+                   'red\'s -book did not open a book that lists the Thunderhead')
+    findings.check(lua_true(game, 'return GetLocalPlayer() ~= Player(1) or not BlzFrameIsVisible(F("recipeBookPanel"))'),
+                   'red\'s -book opened the book on blue\'s screen')
+    try:
+        game.log(f'the book on red\'s screen: {game.screenshot(0)}')
+    except TestFailed as problem:
+        game.log(f'no screenshot: {problem}')
+    game.cmd(RED, '-book')
+    time.sleep(1)
+    findings.check(lua_true(game, 'return not BlzFrameIsVisible(F("recipeBookPanel"))'), 'a second -book did not close the book')
+
     game.watch(CREEPS)
     met = rune_pairs(game, [['Air', 'Air'], ['Water', 'Water']], 16)
     if 0 in met and 1 in met:
