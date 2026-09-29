@@ -9,13 +9,14 @@ hit, or could not be built.
 Raw is the damage before the target's armor, as the map's damage triggers see it; dealt is what
 the target lost. Spells (attack=false) are counted apart from attacks.
 """
+import math
 import time
 
 import maul
 from builds import race_named
 from maul import CREEPS, RED
-from races import (DEPLETED_ROCK, ELEMENTALIST_BUILDER, ELEMENTS, Findings, SIPHON, UNCHARGED_RUNE, build_chain,
-                   build_in_red_lane, give_gold, red_lane_spots, unit_at)
+from races import (DEPLETED_ROCK, ELEMENTALIST_BUILDER, ELEMENTS, Findings, LANE_SPACING, SIPHON, UNCHARGED_RUNE,
+                   build_chain, build_in_red_lane, give_gold, red_lane_spots, unit_at)
 from slop import TestFailed, trace
 
 # Other races' finishers, by the race that builds them and their name
@@ -898,3 +899,247 @@ def test_recipe_discovery(game):
     findings.check(' rejected signature' in line, f'an edited save was not rejected: {line}')
     findings.check(book_size(game, 0, 0) == 0, f'after an edited save red\'s book holds {book_size(game, 0, 0)}')
     findings.raise_if_any('the recipe book')
+
+
+# The other Primals, made from ingredients put down by the map's .tower hook: fusion, fee and what
+# each is for, then Surge, five waves and the ascension of all four
+# (name, source, target, Primal, fee, class, Ascended, fee, class)
+PRIMALS = [
+    ('Haboob', 'u03D', 'u033', 'uP03', 400, 'Haboob', 'uA03', 500, 'EndlessStorm'),
+    ('Heart of Life', 'u02D', 'u02D', 'uP04', 500, 'AttunedTower', 'uA04', 600, 'AvatarOfLife'),
+    ('World Tree', 'u036', 'u02F', 'uP05', 400, 'AttunedTower', 'uA05', 450, 'Nordrassil'),
+    ('Inferno', 'u039', 'u031', 'uP06', 350, 'Inferno', 'uA06', 400, 'Firelord'),
+]
+HABOOB_TARGETS = 8
+# More targets than it may hit, so its cap shows
+HABOOB_RING = 12
+INFERNO_DPS, FIRELORD_DPS = 400, 900
+# The map's boss waves are 35-37, the Hero armoured ones (waves 9, 14, 19... are champions)
+BOSS_WAVE = 35
+
+
+def place_tower(game, unit_type, spot):
+    """A tower put down for red as if built (the map's .tower hook); its id."""
+    before = len(game.events('tower'))
+    game.cmd(RED, f'.tower {unit_type} {spot[0]} {spot[1]}')
+    game.wait(f'the {unit_type}', lambda: any(' made ' in line or ' could not ' in line
+                                              for line in game.events('tower')[before:]), 10)
+    line = next(line for line in game.events('tower')[before:] if ' made ' in line or ' could not ' in line)
+    if ' could not ' in line:
+        raise TestFailed(line)
+    return trace.parse_fields(line)['id']
+
+
+def tower_classes(game):
+    """{tower id: class} of red's towers, as the map's .towers lists them."""
+    before = len(game.events('tower'))
+    game.cmd(RED, '.towers')
+    game.wait('the tower list', lambda: any(line.endswith('p0 end') for line in game.events('tower')[before:]), 10)
+    fields = [trace.parse_fields(line) for line in game.events('tower')[before:] if ' class=' in line and ' made ' not in line]
+    return {f['id']: f['class'] for f in fields}
+
+
+def spread_spots(count, distance):
+    """Spots in red's lane at least `distance` apart, each with the spot to its right free for a second tower."""
+    spots = red_lane_spots()
+    chosen = []
+    for x, y in spots:
+        if (x + LANE_SPACING, y) in spots and all(abs(x - cx) + abs(y - cy) >= distance for cx, cy in chosen):
+            chosen.append((x, y))
+    if len(chosen) < count:
+        raise TestFailed(f'red\'s lane has no {count} spots {distance} apart')
+    return chosen[:count]
+
+
+def ring(spot, radius, count):
+    return [(round(spot[0] + radius * math.cos(2 * math.pi * i / count)), round(spot[1] + radius * math.sin(2 * math.pi * i / count)))
+            for i in range(count)]
+
+
+def watch_hits(game, seconds=MEASURE_SECONDS):
+    """Every hit over the next seconds: [(tick, fields)]."""
+    before = len(game.events('hit'))
+    time.sleep(seconds)
+    return [(tick_of(line), trace.parse_fields(line)) for line in game.events('hit')[before:]]
+
+
+def per_second(hits, source, spells, field='raw'):
+    """A tower's damage a second per target it hit: its attacks, or (spells) its other damage; `raw`
+    is before the target's armor, `amount` what was dealt."""
+    own = [(t, f) for t, f in hits if f.get('src') == source and (f.get('attack') != 'true') == spells]
+    if len(own) < 2:
+        return 0
+    seconds = max((own[-1][0] - own[0][0]) * TICK, TICK)
+    return sum(f.get(field, 0) for _, f in own) / seconds / max(len({f.get('dst') for _, f in own}), 1)
+
+
+# One volley's hits land over a few ticks (missiles fly different distances); well under a cooldown
+VOLLEY_TICKS = 3
+
+
+def volley_targets(hits, source):
+    """How many targets a tower hits in a volley, once all its targets stand: the most common count
+    over the later half of its volleys (a volley ends where its hits pause for more than 2 ticks)."""
+    volleys, current = [], []
+    for t, f in hits:
+        if f.get('src') != source:
+            continue
+        if current and t - current[-1][0] > 2:
+            volleys.append(current)
+            current = []
+        current.append((t, f.get('dst')))
+    volleys.append(current)
+    counts = [len({dst for _, dst in volley}) for volley in volleys[len(volleys) // 2:] if volley]
+    return max(set(counts), key=counts.count) if counts else 0
+
+
+def per_hit(hits, source):
+    """The mean damage dealt by a tower's attacks: a rate from a few slow hits is off by N/(N-1)."""
+    dealt = [f.get('amount', 0) for _, f in hits if f.get('src') == source and f.get('attack') == 'true']
+    return sum(dealt) / len(dealt) if dealt else 0
+
+
+def most_in_a_tick(hits, source):
+    """The most targets a tower hit in one volley (VOLLEY_TICKS): a Barrage's extra targets come as
+    spell damage, and are counted."""
+    own = [(t, f.get('dst')) for t, f in hits if f.get('src') == source]
+    return max((len({dst for u, dst in own if t <= u < t + VOLLEY_TICKS}) for t, _ in own), default=0)
+
+
+def test_primals(game):
+    """Haboob, Heart of Life, World Tree and Inferno: each ingredient pair reveals and then makes its
+    Primal for its fee, with the class that gives it its behaviour; the Haboob hits 8 targets, the
+    World Tree splashes, the Inferno burns 400 a second. After ten Surges and five waves each ascends
+    for its fee: the Avatar of Life hits half again as hard in a boss wave, Nordrassil roots outside
+    boss waves only, the Firelord burns hotter. Damage per second of all eight."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, 'I024')
+    give_gold(game, (RED,))
+    game.cmd(RED, '-lives 1000000')
+    forget_recipes(game)
+    game.watch(CREEPS)
+    game.cmd(RED, '.gold 100000')
+    game.wait_for('the gold', lambda beat: beat.gold(RED) == 100000)
+
+    made, spots = {}, []
+    for (name, source_type, target_type, primal, fee, _, _, _, _), asked in zip(PRIMALS, spread_spots(len(PRIMALS), 1000)):
+        source = place_tower(game, source_type, asked)
+        target = place_tower(game, target_type, (asked[0] + LANE_SPACING, asked[1]))
+        # Where it stands: a building with a larger footprint (Purgatory L2) is moved to fit
+        unit = next(u for u in game.units(RED) if u['id'] == source)
+        spot = (unit['x'], unit['y'])
+        spots.append(spot)
+        reveal(game, source, target, primal, findings)
+        gold = maul.fresh_beat(game).gold(RED)
+        game.order(RED, source, SIPHON, target)
+        try:
+            game.wait(f'the {name}', lambda: unit_at(game, RED, spot, (primal,)), 15)
+        except TestFailed as error:
+            findings.append(f'{name}: {error}')
+            continue
+        findings.check(maul.fresh_beat(game).gold(RED) == gold - fee, f'the {name} did not take {fee} gold')
+        made[name] = unit_at(game, RED, spot, (primal,))['id']
+    classes = tower_classes(game)
+    for name, _, _, _, _, cls, _, _, _ in PRIMALS:
+        if name in made:
+            findings.check(classes.get(made[name]) == cls, f'the {name} is a {classes.get(made[name])}, not a {cls}')
+    findings.raise_if_any('making the Primals')
+
+    def place_targets(towers):
+        """Targets for each: the Haboob a ring of ground and air, the World Tree a clump, the Inferno
+        two, the Heart of Life one; their ids. They are creeps, so a wave does not end while they stand."""
+        placed = []
+
+        def create(kind, x, y):
+            placed.append(game.create(CREEPS, kind, x, y, life=TARGET_LIFE, rooted=True)[0]['id'])
+        # The splash towers' clumps first: with range 800 they would otherwise take a neighbour's
+        # lone target that stood first, and keep to it
+        for name, tower in sorted(towers.items(), key=lambda item: item[0] not in ('World Tree', 'Nordrassil')):
+            unit = next(u for u in game.units(RED) if u['id'] == tower)
+            here = (unit['x'], unit['y'])
+            if name in ('Haboob', 'Endless Storm'):
+                for i, (x, y) in enumerate(ring(here, 320, HABOOB_RING)):
+                    create(maul.AIR_TARGET if i % 2 else maul.GROUND_TARGET, x, y)
+            elif name in ('World Tree', 'Nordrassil'):
+                for dx in (-60, 0, 60):
+                    create(maul.GROUND_TARGET, here[0] + dx, here[1] + 300)
+            elif name in ('Inferno', 'Firelord'):
+                for dy in (-200, 200):
+                    create(maul.GROUND_TARGET, here[0], here[1] + dy)
+            else:
+                create(maul.GROUND_TARGET, here[0], here[1] + 96)
+        return placed
+
+    targets = place_targets(made)
+    hits = watch_hits(game)
+    rows = [(name, round(per_second(hits, tower, False)), round(per_second(hits, tower, True)), most_in_a_tick(hits, tower))
+            for name, tower in made.items()]
+    for row in rows:
+        game.log(f'{row[0]:16} attack {row[1]:>7} a second a target, other {row[2]:>6}, most targets in a tick {row[3]}')
+    by_name = {row[0]: row for row in rows}
+    haboob_volley = volley_targets(hits, made['Haboob'])
+    findings.check(haboob_volley == HABOOB_TARGETS, f'the Haboob hits {haboob_volley} targets a volley, not {HABOOB_TARGETS}')
+    findings.check(by_name['World Tree'][3] >= 2, 'the World Tree did not splash')
+    findings.check(abs(by_name['Inferno'][2] - INFERNO_DPS) <= INFERNO_DPS / 4,
+                   f'the Inferno burns {by_name["Inferno"][2]} a second, not about {INFERNO_DPS}')
+    findings.check(by_name['Heart of Life'][1] > 0, 'the Heart of Life never hit')
+
+    # Ten Surges each, five waves, and they ascend
+    for target in targets:
+        game.remove(CREEPS, target)
+    for name, tower in made.items():
+        before = len(game.events('surge'))
+        for n in range(SURGE_LIMIT):
+            game.order(RED, tower, SURGE)
+            game.wait(f'{name}\'s surge {n + 1}', lambda: len(game.events('surge')) > before + n, 10)
+    for _ in range(5):
+        play_round(game)
+    ascended = {}
+    for (name, _, _, _, _, _, result, fee, _), spot in zip(PRIMALS, spots):
+        if name not in made:
+            continue
+        gold = maul.fresh_beat(game).gold(RED)
+        game.order(RED, made[name], ASCEND)
+        try:
+            game.wait(f'the {name} to ascend', lambda: unit_at(game, RED, spot, (result,)), 15)
+        except TestFailed as error:
+            findings.append(f'{name}: {error}: {game.events("ascend")[-2:]}')
+            continue
+        findings.check(maul.fresh_beat(game).gold(RED) == gold - fee, f'the {name}\'s ascension did not take {fee} gold')
+        ascended[name] = unit_at(game, RED, spot, (result,))['id']
+    classes = tower_classes(game)
+    for name, _, _, _, _, _, _, _, cls in PRIMALS:
+        if name in ascended:
+            findings.check(classes.get(ascended[name]) == cls, f'the ascended {name} is a {classes.get(ascended[name])}, not a {cls}')
+
+    names = {'Haboob': 'Endless Storm', 'Heart of Life': 'Avatar of Life', 'World Tree': 'Nordrassil', 'Inferno': 'Firelord'}
+    towers = {names[name]: tower for name, tower in ascended.items()}
+    place_targets(towers)
+    roots = len(game.events('root'))
+    hits = watch_hits(game)
+    rows = {name: (round(per_second(hits, tower, False)), round(per_second(hits, tower, True)), most_in_a_tick(hits, tower))
+            for name, tower in towers.items()}
+    for name, row in rows.items():
+        game.log(f'{name:16} attack {row[0]:>7} a second a target, other {row[1]:>6}, most targets in a tick {row[2]}')
+    if 'Endless Storm' in rows:
+        storm_volley = volley_targets(hits, towers['Endless Storm'])
+        findings.check(storm_volley == HABOOB_TARGETS, f'the Endless Storm hits {storm_volley} targets a volley, not {HABOOB_TARGETS}')
+    if 'Firelord' in rows:
+        findings.check(rows['Firelord'][1] >= FIRELORD_DPS, f'the Firelord burns {rows["Firelord"][1]} a second, under {FIRELORD_DPS}')
+    if 'Nordrassil' in towers:
+        findings.check(len(game.events('root')) > roots, 'Nordrassil rooted nothing')
+
+    # A boss wave: the Avatar of Life hits half again as hard, and Nordrassil roots nothing
+    if 'Avatar of Life' in towers:
+        normal = round(per_hit(hits, towers['Avatar of Life']))
+        game.cmd(RED, f'-wave {BOSS_WAVE}')
+        time.sleep(1)
+        roots = len(game.events('root'))
+        boss_hits = watch_hits(game, 10)
+        boss = round(per_hit(boss_hits, towers['Avatar of Life']))
+        game.log(f'Avatar of Life: {normal} a hit, {boss} in a boss wave')
+        findings.check(abs(boss - 1.5 * normal) <= 0.02 * normal, f'the Avatar of Life hits for {boss} in a boss wave, {normal} otherwise')
+        if 'Nordrassil' in towers:
+            findings.check(len(game.events('root')) == roots, 'Nordrassil rooted in a boss wave')
+    findings.raise_if_any('the Primals')
