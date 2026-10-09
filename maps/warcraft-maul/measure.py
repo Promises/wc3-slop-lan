@@ -993,6 +993,37 @@ def most_in_a_tick(hits, source):
     return max((len({dst for u, dst in own if t <= u < t + VOLLEY_TICKS}) for t, _ in own), default=0)
 
 
+def test_primal_looks(game):
+    """Screenshots of the Primals and their Ascended forms in red's lane, for looking at their
+    models: all twelve from red's camera, then each one close; then red's recipe book. Nothing in
+    it can fail."""
+    maul.start(game)
+    maul.pick(game, RED, 'I024')
+    min_x, min_y, max_x, max_y = maul.lane_areas()[RED]
+    towers = [f'uP0{n}' for n in range(1, 7)] + [f'uA0{n}' for n in range(1, 7)]
+    step = (max_x - min_x) / 6
+    placed = []
+    for index, kind in enumerate(towers):
+        row, column = divmod(index, 6)
+        spot = (int(min_x + step * (column + 0.5)), int(min_y + (max_y - min_y) * (0.3 + 0.4 * row)))
+        place_tower(game, kind, spot)
+        placed.append((kind, spot))
+
+    def look(x, y, distance, what):
+        game.cmd(RED, f'.lua SetCameraPosition({x}, {y}) SetCameraField(CAMERA_FIELD_TARGET_DISTANCE, {distance}, 0)')
+        time.sleep(2)
+        try:
+            game.log(f'{what}: {game.screenshot(0)}')
+        except TestFailed as problem:
+            game.log(f'no screenshot of {what}: {problem}')
+    look(int((min_x + max_x) / 2), int((min_y + max_y) / 2), 2600, 'all twelve')
+    for kind, (x, y) in placed:
+        look(x, y, 1100, kind)
+    # And the recipe book, open on red's screen
+    game.cmd(RED, '-book')
+    look(int((min_x + max_x) / 2), int((min_y + max_y) / 2), 2600, 'the recipe book')
+
+
 def test_primals(game):
     """Haboob, Heart of Life, World Tree and Inferno: each ingredient pair reveals and then makes its
     Primal for its fee, with the class that gives it its behaviour; the Haboob hits 8 targets, the
