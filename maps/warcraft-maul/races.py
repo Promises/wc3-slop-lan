@@ -477,12 +477,17 @@ def check_attack(game, data, tower, target, cls, hits, casts, findings):
 
 
 def check_spread(data, tower, around, hits, findings):
-    """A tower that attacks a random enemy spread its attacks over the targets around it."""
+    """A tower that attacks a random enemy spread its attacks over the targets around it, and
+    picked again for each attack: one attack follows another onto the same target about one time
+    in len(around), not every second time (a rolled target once took two attacks in a row)."""
     on = {}
+    order = []
     for hit in by_form(hits, tower, data['id']):
         if hit['attack'] == 'true' and hit['dst'] in around:
             on[hit['dst']] = on.get(hit['dst'], 0) + 1
+            order.append(hit['dst'])
     attacks = sum(on.values())
+    repeats = sum(1 for a, b in zip(order, order[1:]) if a == b)
     # 24 random picks of 8 miss 3 or more of them about once in 1400 rounds
     if attacks < 3 * len(around):
         findings.append(f'{named(data)} hit its {len(around)} targets only {attacks} times, too few to see a spread')
@@ -490,6 +495,10 @@ def check_spread(data, tower, around, hits, findings):
     findings.check(len(on) > len(around) - 3 and max(on.values()) <= attacks // 2,
                    f'{named(data)} does not pick its targets at random: {attacks} attacks on '
                    f'{len(on)} of {len(around)} targets, at most {max(on.values())} on one')
+    # Picked anew each time, about 1 in 8 follow onto the same target; past 35% of 23 or more pairs
+    # is a 1-in-1000 fluke at most, and every second time is 50%
+    findings.check(repeats <= 0.35 * (len(order) - 1),
+                   f'{named(data)} attacked the same target twice in a row {repeats} times in {len(order)} attacks')
 
 
 def check_auras(game, by_id, slot, targets, neighbours, looking, findings):
@@ -564,6 +573,17 @@ def check_classes(game, findings, players=(RED,)):
     return classes
 
 
+def research_for_auras(game, race, players):
+    """Researches what the race's auras need, as a player would at its research building (Roots'
+    Thorns needs the Den's R000): an aura whose research is missing never turns on."""
+    needed = sorted({research for tower in race['towers'] for aura in tower['auras'] for research in aura['requires']})
+    for player in players:
+        for research in needed:
+            game.cmd(player, f'.lua SetPlayerTechResearched(Player({player}), FourCC("{research}"), 1)')
+    if needed:
+        game.log(f'researched for the auras: {", ".join(needed)}')
+
+
 def make_race_test(race):
     def test(game):
         findings = Findings()
@@ -573,6 +593,7 @@ def make_race_test(race):
             findings.check(builder['type'] == race['builder'],
                            f"p{player}'s pick gave a {builder['type']}, the race's builder is {race['builder']}")
             findings.check(maul.fresh_beat(game).lumber(player) == 0, f"p{player}'s pick did not take the starting lumber")
+        research_for_auras(game, race, (RED, BLUE))
         try:
             check_race(game, race, findings, players=(RED, BLUE))
         except TestFailed as error:

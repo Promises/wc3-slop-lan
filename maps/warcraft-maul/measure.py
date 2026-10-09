@@ -15,8 +15,9 @@ import time
 import maul
 from builds import race_named
 from maul import BLUE, CREEPS, RED
-from races import (DEPLETED_ROCK, ELEMENTALIST_BUILDER, ELEMENTS, Findings, LANE_SPACING, SIPHON, UNCHARGED_RUNE,
-                   build_chain, build_in_red_lane, give_gold, red_lane_spots, unit_at)
+from races import (COIN, DEPLETED_ROCK, ELEMENTALIST_BUILDER, ELEMENTS, Findings, KOINZ, LANE_SPACING, LOOT_BOXER,
+                   LOOTBAG, ROCKS, SIPHON, STICK, UNCHARGED_RUNE, build_chain, build_in_red_lane, give_gold,
+                   red_lane_spots, unit_at)
 from slop import TestFailed, trace
 
 # Other races' finishers, by the race that builds them and their name
@@ -1460,3 +1461,183 @@ def test_midgame(game):
     for spot, name in ((blaze_spot, 'Blaze'), (bubbles_spot, 'Bubbles')):
         findings.check(unit_at(game, RED, spot, (UNCHARGED_RUNE,)) is not None, f'{name} did not turn back into an Uncharged Rune')
     findings.raise_if_any('the midgame bridge')
+
+
+# Forest Trolls' High Priest: a dummy casts Monsoon (A03P, from ANmo) on its target's spot
+MONSOON, MONSOON_DUMMY = 'A03P', 'u008'
+# How long it lasts, as the High Priest's tooltip and dummy (13 s) have it
+MONSOON_SECONDS = 12
+
+
+def cast_monsoon(game, spot, life):
+    """A Monsoon cast as the High Priest casts it: a dummy of red's with the ability, living `life`
+    seconds, ordered onto the spot. The dummy's id."""
+    dummy = game.create(RED, MONSOON_DUMMY, spot[0], spot[1] - 200)[0]['id']
+    lua_value(game, f'UnitApplyTimedLife(unit({dummy}), FourCC("BTLF"), {life}) '
+                    f'UnitAddAbility(unit({dummy}), FourCC("{MONSOON}")) '
+                    f'return IssuePointOrder(unit({dummy}), "monsoon", {spot[0]}, {spot[1]})')
+    return dummy
+
+
+def monsoon_strikes(hits, target, dummies):
+    """The ticks a target was struck by the given dummies' Monsoons."""
+    return [tick for tick, f in hits if f.get('dst') == target and f.get('src') in dummies]
+
+
+def test_monsoon_strikes_every_cast(game):
+    """Monsoon strikes for its 12 s, not as long as its caster lives, and a unit struck by one
+    Monsoon is struck by the next one too: one cast whose caster outlives it, then a second after
+    the first caster is gone. Two Monsoons at once do not stack - a unit under one is not struck by
+    the other (the game's Monsoon, measured 2026-10-09) - which is logged, not judged."""
+    findings = Findings()
+    maul.start(game)
+    # Hits on creeps are only traced for a watched player
+    game.watch(CREEPS)
+    spot = red_lane_spots()[5]
+    target = game.create(CREEPS, maul.GROUND_TARGET, spot[0], spot[1], life=TARGET_LIFE, rooted=True)[0]['id']
+
+    # One Monsoon, its caster living well past it
+    first = cast_monsoon(game, spot, 25)
+    fields = lua_value(game, f'local a = BlzGetUnitAbility(unit({first}), FourCC("{MONSOON}")) '
+                             f'return BlzGetAbilityRealLevelField(a, ABILITY_RLF_DURATION_NORMAL, 0) .. " s, area " .. '
+                             f'BlzGetAbilityRealLevelField(a, ABILITY_RLF_AREA_OF_EFFECT, 0)')
+    game.log(f'Monsoon at runtime: duration {fields}')
+    struck = monsoon_strikes(watch_hits(game, 26), target, {first})
+    span = (struck[-1] - struck[0]) * TICK if len(struck) > 1 else 0
+    game.log(f'first Monsoon: {len(struck)} strikes over {span:.1f} s')
+    findings.check(len(struck) > 0, 'the first Monsoon never struck')
+    findings.check(span <= MONSOON_SECONDS + 1, f'the Monsoon struck for {span:.1f} s, past its {MONSOON_SECONDS} s')
+
+    # A second, its caster living as the High Priest's does, after the first caster is gone
+    second = cast_monsoon(game, spot, 13)
+    struck = monsoon_strikes(watch_hits(game, 14), target, {second})
+    game.log(f'second Monsoon: {len(struck)} strikes')
+    findings.check(len(struck) > 0, 'a unit struck by one Monsoon was never struck by the next')
+
+    # Two at once
+    both = {cast_monsoon(game, spot, 13), cast_monsoon(game, spot, 13)}
+    hits = watch_hits(game, 14)
+    per_dummy = {dummy: len(monsoon_strikes(hits, target, {dummy})) for dummy in both}
+    game.log(f'two Monsoons at once: {sorted(per_dummy.values())} strikes (they do not stack)')
+    findings.raise_if_any('Monsoon')
+
+
+# Human's Venom Tower: attacks a random creep in range, a new one each attack (RandomTargeting.ts)
+VENOM = 'h045'
+
+
+def test_venom_target_leaves_range(game):
+    """A Venom Tower whose ordered creep walks out of its range goes on attacking: the creep its
+    latest order went to (its 'target ... ordered' note) is moved far away, and the tower attacks
+    another within a few seconds; three times. (The game drops the order by itself.)"""
+    findings = Findings()
+    maul.start(game)
+    # Hits on creeps are only traced for a watched player
+    game.watch(CREEPS)
+    spot = red_lane_spots()[5]
+    tower = place_tower(game, VENOM, spot)
+    places = [(spot[0] - 150, spot[1] - 150), (spot[0] + 150, spot[1] - 150), (spot[0], spot[1] + 180)]
+    targets = [game.create(CREEPS, maul.GROUND_TARGET, x, y, life=TARGET_LIFE, rooted=True)[0]['id'] for x, y in places]
+    home = dict(zip(targets, places))
+
+    def ordered_since(since):
+        marker = f' target {tower} ordered '
+        return [int(line.split(marker, 1)[1].split()[0]) for line in game.events('target')[since:] if marker in line]
+
+    def attacks_since(since):
+        return [trace.parse_fields(line) for line in game.events('hit')[since:]
+                if f' src={tower} ' in line and 'attack=true' in line]
+
+    game.wait('the tower to order itself onto a target', lambda: ordered_since(0), 15)
+    for round_ in range(3):
+        gone = ordered_since(0)[-1]
+        x, y = home[gone]
+        hits = len(game.events('hit'))
+        game.cmd(RED, f'.lua SetUnitPosition(unit({gone}), {x + 3000}, {y})')
+        try:
+            game.wait(f'an attack on a target still in range after {gone} left',
+                      lambda: any(f.get('dst') not in (gone, None) for f in attacks_since(hits)), 6)
+        except TestFailed as error:
+            findings.append(f'round {round_ + 1}: {error}')
+        game.log(f'round {round_ + 1}: moved {gone}, the creep of its latest order, away')
+        game.cmd(RED, f'.lua SetUnitPosition(unit({gone}), {x}, {y})')
+        time.sleep(2)
+    findings.raise_if_any('the Venom Tower')
+
+
+# Loot Boxer's items, from races.py: a tier 9 box holds up to 6 mana and has a one-slot inventory
+LOOT_BOX_TIER_9 = 'u04C'
+ITEM_MANA = {STICK: 1, COIN: 2, KOINZ: 6}
+
+
+def lua_value(game, code):
+    """What a line of Lua returned, as text ('ok <value>' stripped)."""
+    before = len(game.events('lua'))
+    game.cmd(RED, '.lua ' + code)
+    game.wait('the Lua line', lambda: len(game.events('lua')) > before, 10)
+    result = game.events('lua')[before].split(' lua ', 1)[1]
+    return result[3:] if result.startswith('ok ') else result
+
+
+def test_loot_boxer_items(game):
+    """Loot Boxer's items, used as a player would (UnitUseItem): Wooden Sticks, a Gold Coin and a
+    Platinum Token give an opened-tier box 1, 2 and 6 mana when the box itself uses them, and
+    nothing when the builder does; a stack of 9 Rocks used turns into a Lootbag (it never did: the
+    game takes the used charge first), a bigger one keeps the rest, and a smaller one stays as it
+    was."""
+    findings = Findings()
+    maul.start(game)
+    builder = maul.pick(game, RED, LOOT_BOXER)['id']
+    box = place_tower(game, LOOT_BOX_TIER_9, red_lane_spots()[5])
+
+    def use(unit, item, charges=None):
+        set_charges = f'SetItemCharges(it, {charges}) ' if charges is not None else ''
+        lua_value(game, f'local it = UnitAddItemById(unit({unit}), FourCC("{item}")) {set_charges}'
+                        f'return UnitUseItem(unit({unit}), it)')
+        time.sleep(1.5)
+
+    def box_mana():
+        return float(lua_value(game, f'return GetUnitState(unit({box}), UNIT_STATE_MANA)'))
+
+    def clear_box():
+        lua_value(game, f'local it = UnitItemInSlot(unit({box}), 0) if it then RemoveItem(it) end return true')
+
+    for item, mana in ITEM_MANA.items():
+        clear_box()
+        lua_value(game, f'SetUnitState(unit({box}), UNIT_STATE_MANA, 0) return true')
+        use(box, item)
+        got = box_mana()
+        game.log(f'{item} used by the box: {got:.2f} mana')
+        findings.check(abs(got - mana) < 0.2, f'{item} gave the box {got:.2f} mana, not {mana}')
+    clear_box()
+    lua_value(game, f'SetUnitState(unit({box}), UNIT_STATE_MANA, 0) return true')
+    use(builder, COIN)
+    findings.check(box_mana() < 0.2, 'a Gold Coin used by the builder gave the box mana')
+
+    def rocks_and_bag():
+        return lua_value(game, f'local r = GetItemOfTypeFromUnitBJ(unit({builder}), FourCC("{ROCKS}")) '
+                               f'return (r and GetItemCharges(r) or -1) .. " " .. '
+                               f'tostring(UnitHasItemOfTypeBJ(unit({builder}), FourCC("{LOOTBAG}")))')
+
+    # A stack of 5 used stays 5; 9 make a Lootbag and are gone; 12 make one and leave 3
+    for stack, expected in ((5, '5 false'), (9, '-1 true'), (12, '3 true')):
+        lua_value(game, f'for i = 0, 5 do local it = UnitItemInSlot(unit({builder}), i) if it then RemoveItem(it) end end return true')
+        use(builder, ROCKS, stack)
+        state = rocks_and_bag()
+        game.log(f'{stack} Rocks used: Rocks left and a Lootbag: {state}')
+        findings.check(state == expected, f'{stack} Rocks used left "{state}" (Rocks, a Lootbag), not "{expected}"')
+    findings.raise_if_any('Loot Boxer items')
+
+
+def test_scoreboard_follows_the_wave(game):
+    """In Sandbox mode the scoreboard's level, armour and creep type follow the current wave (they
+    stayed wave 1's): screenshots of red's after -wave 35 (a boss wave) and -wave 12. The board's
+    text cannot be read from the map, so the screenshots are the evidence."""
+    maul.start(game)
+    for wave in (35, 12):
+        game.cmd(RED, f'-wave {wave}')
+        time.sleep(2)
+        try:
+            game.log(f'the scoreboard on wave {wave}: {game.screenshot(0)}')
+        except TestFailed as problem:
+            game.log(f'no screenshot of the scoreboard on wave {wave}: {problem}')
