@@ -1641,3 +1641,81 @@ def test_scoreboard_follows_the_wave(game):
             game.log(f'the scoreboard on wave {wave}: {game.screenshot(0)}')
         except TestFailed as problem:
             game.log(f'no screenshot of the scoreboard on wave {wave}: {problem}')
+
+
+# Human's Cold Tower: always attacks the creep in range furthest along the path (FrontmostTargeting.ts)
+COLD_TOWER, HUMAN_TOWN_HALL = 'h04B', 'I006'
+WAVE_CREEP_PLAYERS = (13, 14, 15, 16)
+# South of red's path where it runs straight west, from the checkpoint at x -2432 to the one at
+# -3584 and on to the teleporter at -4352, all at y 4736: there the creep furthest along is the
+# one furthest west
+COLD_TOWER_SPOT = (-3008, 4224)
+PATH_Y, PATH_EAST = 4736, -2432
+# How far a creep may stray from the path's line and still count as on it, and how far east of the
+# westmost a pick may stand (creeps of one row walk side by side)
+PATH_SLACK, ROW_SLACK = 160, 64
+
+
+def front_picks(game, tower, since=0):
+    """The Cold Tower's picks: [(picked, [(ref, x, y), ...] best first)]."""
+    marker = f' target {tower} front '
+    picks = []
+    for line in game.events('target')[since:]:
+        if marker not in line:
+            continue
+        head, ranked = line.split(marker, 1)[1].split(' of ', 1)
+        candidates = []
+        for entry in ranked.split():
+            # The note lists the best few as ref@x,y; a line cut short leaves a stub
+            ref, _, at = entry.partition('@')
+            x, _, y = at.partition(',')
+            if ref.isdigit() and x.lstrip('-').isdigit() and y.lstrip('-').isdigit():
+                candidates.append((int(ref), int(x), int(y)))
+        picks.append((int(head.split()[0]), candidates))
+    return picks
+
+
+def test_cold_tower_targets_the_frontmost(game):
+    """The Cold Tower attacks the creep in range furthest along the path: with a wave walking red's
+    straight leg west, every pick it makes among creeps on that leg is the westmost of them (give
+    or take a row walking side by side), and its attacks follow its picks."""
+    findings = Findings()
+    maul.start(game)
+    # Creeps only come to the lanes of players with a race
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    # Hits are only traced on a watched player's units, and a wave's creeps belong to all four
+    # creep players (Navy, Turquoise, Violet, Wheat)
+    for creep_player in WAVE_CREEP_PLAYERS:
+        game.watch(creep_player)
+    game.cmd(RED, '-lives 1000000')
+    tower = place_tower(game, COLD_TOWER, COLD_TOWER_SPOT)
+    # A ground wave, made tougher so the creeps take a few hits and the front changes hands
+    game.cmd(RED, '-diff 400')
+    game.cmd(RED, '-wave 2')
+    time.sleep(1)
+    notes = len(game.events('target'))
+    maul.start_wave(game)
+    time.sleep(30)
+    picks = front_picks(game, tower, notes)
+    on_leg = [(picked, cands) for picked, cands in picks
+              if len(cands) > 1 and any(ref == picked for ref, _, _ in cands)
+              and all(abs(y - PATH_Y) <= PATH_SLACK and x <= PATH_EAST for _, x, y in cands)]
+    wrong = [(picked, cands) for picked, cands in on_leg
+             if next(x for ref, x, _ in cands if ref == picked) > min(x for _, x, _ in cands) + ROW_SLACK]
+    game.log(f'{len(picks)} picks, {len(on_leg)} among creeps on the straight leg, {len(wrong)} not the westmost')
+    for picked, cands in wrong[:3]:
+        game.log(f'  picked {picked} of {cands}')
+    findings.check(len(on_leg) >= 5, f'only {len(on_leg)} picks among creeps on the straight leg, too few to judge')
+    findings.check(not wrong, f'{len(wrong)} of {len(on_leg)} picks were not the creep furthest along')
+    # Its attacks go where it picked: the swing under way when it picks still lands on the old
+    # target, so the picked creep takes one of the next two attacks
+    attacks = [(tick_of(line), trace.parse_fields(line)) for line in game.events('hit')
+               if f' src={tower} ' in line and 'attack=true' in line]
+    pick_ticks = [(tick_of(line), int(line.split(f' target {tower} front ', 1)[1].split()[0]))
+                  for line in game.events('target')[notes:] if f' target {tower} front ' in line]
+    followed = sum(1 for tick, picked in pick_ticks
+                   if picked in [f.get('dst') for t, f in attacks if t > tick][:2])
+    game.log(f'attacks after a pick that landed on the picked creep: {followed} of {len(pick_ticks)}')
+    findings.check(not pick_ticks or followed >= 0.7 * len(pick_ticks),
+                   f'only {followed} of {len(pick_ticks)} picks were followed by an attack on the picked creep')
+    findings.raise_if_any('the Cold Tower')
