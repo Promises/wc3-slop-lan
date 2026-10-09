@@ -1721,19 +1721,52 @@ def test_cold_tower_targets_the_frontmost(game):
     findings.raise_if_any('the Cold Tower')
 
 
-def walker_speed(game, walker, seconds=2.0):
-    """A unit's speed over `seconds` of game time: its position read twice, timed by the trace ticks."""
-    def sample():
-        before = len(game.events('lua'))
-        game.cmd(RED, f'.lua return GetUnitX(unit({walker})) .. " " .. GetUnitY(unit({walker}))')
-        game.wait('a position', lambda: len(game.events('lua')) > before, 10)
-        line = game.events('lua')[before]
-        x, y = line.split(' lua ok ', 1)[1].split()
-        return tick_of(line), float(x), float(y)
-    t1, x1, y1 = sample()
-    time.sleep(seconds)
-    t2, x2, y2 = sample()
-    return math.dist((x1, y1), (x2, y2)) / max((t2 - t1) * TICK, TICK)
+# Walkers for the frost tests: a creep player's units with endless life, walking red's straight leg
+FROST_WALK = ((-1900, PATH_Y), (-4100, PATH_Y))
+
+
+def walker_position(game, walker):
+    """(tick, x, y) of a unit, read in game."""
+    before = len(game.events('lua'))
+    game.cmd(RED, f'.lua return GetUnitX(unit({walker})) .. " " .. GetUnitY(unit({walker}))')
+    game.wait('a position', lambda: len(game.events('lua')) > before, 10)
+    line = game.events('lua')[before]
+    x, y = line.split(' lua ok ', 1)[1].split()
+    return tick_of(line), float(x), float(y)
+
+
+def frosted(game, walker):
+    return lua_value(game, f'return GetUnitAbilityLevel(unit({walker}), FourCC("Bfro"))') not in ('0', 'nil')
+
+
+def frost_walk(game, kinds, tower=True):
+    """Walkers of these kinds side by side, ordered down the leg: [(speed, frosted at any look)].
+    The first one's speed is measured once it carries the frost (with no tower, at the same point
+    of its walk, about 1.5 s in), over 1.5 s of game time; the others are only looked at."""
+    start, end = FROST_WALK
+    walkers = [game.create(13, kind, start[0], start[1] + 96 * i, life=TARGET_LIFE)[0]['id']
+               for i, kind in enumerate(kinds)]
+    for i, walker in enumerate(walkers):
+        lua_value(game, f'return IssuePointOrder(unit({walker}), "move", {end[0]}, {end[1] + 96 * i})')
+    seen = {walker: False for walker in walkers}
+    for _ in range(10 if tower else 0):
+        time.sleep(0.3)
+        for walker in walkers:
+            seen[walker] = seen[walker] or frosted(game, walker)
+        if seen[walkers[0]]:
+            break
+    if not tower:
+        time.sleep(1.5)
+    first = walker_position(game, walkers[0])
+    time.sleep(1.5)
+    last = walker_position(game, walkers[0])
+    for walker in walkers:
+        seen[walker] = seen[walker] or frosted(game, walker)
+    speed = math.dist(first[1:], last[1:]) / max((last[0] - first[0]) * TICK, TICK)
+    for walker in walkers:
+        game.cmd(RED, f'.lua RemoveUnit(unit({walker}))')
+    time.sleep(1)
+    return [(speed if walker == walkers[0] else 0.0, seen[walker]) for walker in walkers]
 
 
 def test_cold_tower_frost(game):
@@ -1746,73 +1779,77 @@ def test_cold_tower_frost(game):
     maul.start(game)
     for player in WAVE_CREEP_PLAYERS:
         game.watch(player)
-    start, end = (-1900, PATH_Y), (-4100, PATH_Y)
-
-    def position(walker):
-        """(tick, x, y) of a walker, read in game."""
-        before = len(game.events('lua'))
-        game.cmd(RED, f'.lua return GetUnitX(unit({walker})) .. " " .. GetUnitY(unit({walker}))')
-        game.wait('a position', lambda: len(game.events('lua')) > before, 10)
-        line = game.events('lua')[before]
-        x, y = line.split(' lua ok ', 1)[1].split()
-        return tick_of(line), float(x), float(y)
-
-    def frost_on(walker):
-        return lua_value(game, f'return GetUnitAbilityLevel(unit({walker}), FourCC("Bfro"))') not in ('0', 'nil')
-
-    def walk(kinds, tower=True):
-        """Walkers of these kinds side by side, ordered down the leg: [(speed, frosted at any look)];
-        only the first one's speed is measured."""
-        walkers = [game.create(13, kind, start[0], start[1] + 96 * i, life=TARGET_LIFE)[0]['id']
-                   for i, kind in enumerate(kinds)]
-        for i, walker in enumerate(walkers):
-            lua_value(game, f'return IssuePointOrder(unit({walker}), "move", {end[0]}, {end[1] + 96 * i})')
-        # The first walker is measured once it carries the frost (or, with none, where it would
-        # have it: at the same point of its walk), over 1.5 s; the others are only looked at
-        frosted = {walker: False for walker in walkers}
-        # With no tower, measured where the frost would have come: about 1.5 s into the walk
-        for _ in range(10 if tower else 0):
-            time.sleep(0.3)
-            for walker in walkers:
-                frosted[walker] = frosted[walker] or frost_on(walker)
-            if frosted[walkers[0]]:
-                break
-        if not tower:
-            time.sleep(1.5)
-        first = position(walkers[0])
-        time.sleep(1.5)
-        last = position(walkers[0])
-        for walker in walkers:
-            frosted[walker] = frosted[walker] or frost_on(walker)
-        speed = math.dist(first[1:], last[1:]) / max((last[0] - first[0]) * TICK, TICK)
-        speeds = {walker: speed if walker == walkers[0] else 0.0 for walker in walkers}
-        for walker in walkers:
-            game.cmd(RED, f'.lua RemoveUnit(unit({walker}))')
-        time.sleep(1)
-        return [(speeds[w], frosted[w]) for w in walkers]
-
-    free = walk(['hfoo'], tower=False) + walk(['hgry'], tower=False)
+    free = frost_walk(game, ['hfoo'], tower=False) + frost_walk(game, ['hgry'], tower=False)
     game.log(f'no tower: footman {free[0][0]:.0f}, gryphon {free[1][0]:.0f} a second')
     towers = [place_tower(game, COLD_TOWER, COLD_TOWER_SPOT)]
     findings.check(lua_value(game, f'return GetUnitAbilityLevel(unit({towers[0]}), FourCC("AC01"))') == '1',
                    'the Cold Tower has no AC01')
-    one = walk(['hfoo']) + walk(['hgry'])
+    one = frost_walk(game, ['hfoo']) + frost_walk(game, ['hgry'])
     game.log(f'one Cold Tower: footman {one[0][0]:.0f} (frost {one[0][1]}), gryphon {one[1][0]:.0f} (frost {one[1][1]})')
-    for (speed, frosted), (base, _), name in zip(one, free, ('footman', 'gryphon')):
-        findings.check(frosted, f'the {name} past a Cold Tower has no frost buff')
+    for (speed, seen), (base, _), name in zip(one, free, ('footman', 'gryphon')):
+        findings.check(seen, f'the {name} past a Cold Tower has no frost buff')
         findings.check(speed < 0.85 * base, f'the {name} walked {speed:.0f} past a Cold Tower, {base:.0f} free')
     towers += [place_tower(game, COLD_TOWER, (COLD_TOWER_SPOT[0] - 128 * i, COLD_TOWER_SPOT[1])) for i in range(1, 6)]
-    six = walk(['hfoo']) + walk(['hgry'])
+    six = frost_walk(game, ['hfoo']) + frost_walk(game, ['hgry'])
     game.log(f'six Cold Towers: footman {six[0][0]:.0f}, gryphon {six[1][0]:.0f}')
     for (speed, _), (single, _), (base, _), name in zip(six, one, free, ('footman', 'gryphon')):
         findings.check(speed >= 0.3 * base, f'six Cold Towers all but stopped the {name}: {speed:.0f} of {base:.0f}')
         findings.check(speed >= 0.85 * single, f'six Cold Towers slowed the {name} more than one: {speed:.0f}, {single:.0f}')
     for tower in towers[1:]:
         game.cmd(RED, f'.lua RemoveUnit(unit({tower}))')
-    pair = walk(['hfoo', 'hfoo'])
+    pair = frost_walk(game, ['hfoo', 'hfoo'])
     game.log(f'two footmen side by side past one Cold Tower: frost {pair[0][1]} and {pair[1][1]} '
              f'(the tower may switch between them, so this does not tell whether the frost splashes)')
     findings.raise_if_any('the Cold Tower\'s frost')
+
+
+UNDEAD_ACOLYTE = 'h03I'
+
+
+def test_undead_acolyte_frost(game):
+    """Workers Union's Undead Acolyte attacks ground only, and its frost attack was A0EU, which
+    reaches air only: it never slowed anything. It has AC01 now, which reaches ground: a footman
+    walking past it carries the frost and walks slower."""
+    findings = Findings()
+    maul.start(game)
+    for player in WAVE_CREEP_PLAYERS:
+        game.watch(player)
+    free = frost_walk(game, ['hfoo'], tower=False)[0][0]
+    acolyte = place_tower(game, UNDEAD_ACOLYTE, COLD_TOWER_SPOT)
+    abilities = lua_value(game, f'return GetUnitAbilityLevel(unit({acolyte}), FourCC("AC01")) .. " " .. '
+                                f'GetUnitAbilityLevel(unit({acolyte}), FourCC("A0EU"))')
+    findings.check(abilities == '1 0', f'the Acolyte\'s AC01 and A0EU levels are {abilities}, not 1 and 0')
+    speed, seen = frost_walk(game, ['hfoo'])[0]
+    game.log(f'footman: {free:.0f} free, {speed:.0f} past an Undead Acolyte (frost {seen})')
+    findings.check(seen, 'the footman past an Undead Acolyte has no frost buff')
+    findings.check(speed < 0.85 * free, f'the footman walked {speed:.0f} past an Undead Acolyte, {free:.0f} free')
+    findings.raise_if_any('the Undead Acolyte\'s frost')
+
+
+def test_race_picker_tabs(game):
+    """Debug builds: the race picker's Dev tab sits right under the tiers while the Secondary tab is
+    hidden (it used to keep Secondary's slot, leaving a gap), and under Secondary once that shows
+    (after a first race). Screenshots of red's picker, before and after a pick; the tabs' places
+    are also read from the frames."""
+    findings = Findings()
+    maul.start(game)
+    lua_value(game, '_G.F = function(name) return BlzGetFrameByName(name, 0) end return true')
+
+    def open_picker():
+        lua_value(game, 'if GetLocalPlayer() == Player(0) then '
+                        'BlzFrameClick(BlzGetFrameByName("raceSelectButton3", 0)) end return true')
+        time.sleep(1.5)
+
+    def shot(what):
+        try:
+            game.log(f'the race picker, {what}: {game.screenshot(0)}')
+        except TestFailed as problem:
+            game.log(f'no screenshot of the race picker, {what}: {problem}')
+    shot('before a race')
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    open_picker()
+    shot('after a race')
+    findings.raise_if_any('the race picker')
 
 
 # A test maze in red's lane, between its first checkpoint (-2432, 4736) and its second
