@@ -1019,6 +1019,15 @@ def test_primal_looks(game):
     look(int((min_x + max_x) / 2), int((min_y + max_y) / 2), 2600, 'all twelve')
     for kind, (x, y) in placed:
         look(x, y, 1100, kind)
+    # Imported icons: a Bubbles beside the first Primal, both selected, shows both in the
+    # selection panel
+    kind, (x, y) = placed[0]
+    lich = unit_at(game, RED, (x, y), (kind,))['id']
+    bubbles = place_tower(game, BUBBLES, (x, y - 256))
+    game.cmd(RED, f'.lua if GetLocalPlayer() == Player(0) then ClearSelection() SelectUnit(unit({lich}), true) '
+                  f'SelectUnit(unit({bubbles}), true) end')
+    look(x, y, 1100, 'the Bubbles icon')
+    game.cmd(RED, '.lua if GetLocalPlayer() == Player(0) then ClearSelection() end')
     # And the recipe book, open on red's screen
     game.cmd(RED, '-book')
     look(int((min_x + max_x) / 2), int((min_y + max_y) / 2), 2600, 'the recipe book')
