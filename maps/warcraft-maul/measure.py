@@ -924,7 +924,7 @@ BOOK_ASCENDED = ['uA01', 'uA02', 'uA03', 'uA04', 'uA05', 'uA06']
 
 
 def book_notes(game, player, kind, since=0):
-    """The ids of a player's 'book' notes of one kind (discovered, revealed, took, ascended)."""
+    """The ids of a player's 'book' notes of one kind (discovered, took, ascended)."""
     marker = f' book p{player} {kind} '
     return [line.split(marker, 1)[1].split()[0] for line in game.events('book')[since:] if marker in line]
 
@@ -961,59 +961,50 @@ def look_at_book(game, what):
 def test_recipe_book(game):
     """The recipe book as the Fusion Table, in its four states (screenshots of red's): a new player
     (1 of 27), midgame (10 of 27, the Lich King made), the table full (the free Primal offered and
-    taken), complete. Every second find earns a free reveal, spent by clicking a sealed cell; a
-    click with no reveal left, on a known cell, or on a Primal before the table is full does
-    nothing; blue's clicks change blue's book only; the clients stay in step. The next game loads
-    what was given and the Ascended made; -forget empties them too."""
+    taken), complete. A click on a sealed cell does nothing; a Primal can be taken free only once
+    every first fusion is found, and only one; blue's click changes blue's book only; the clients
+    stay in step. The next game loads the free Primal as given and the Ascended made; -forget
+    empties them too."""
     findings = Findings()
     maul.start(game)
     for player in (RED, BLUE):
         maul.pick(game, player, 'I024')
         before = len(game.events('book'))
         game.cmd(player, '-forget')
-        game.wait('the book to empty', lambda: book_notes(game, player, 'forgot', before) or
-                  any(f' book p{player} forgot' in line for line in game.events('book')[before:]), 10)
+        game.wait('the book to empty', lambda: any(f' book p{player} forgot' in line
+                                                   for line in game.events('book')[before:]), 10)
     lua_true(game, '_G.F = function(name) return BlzGetFrameByName(name, 0) end return true')
 
     def text_has(frame, text, player=RED):
         return lua_true(game, f'return GetLocalPlayer() ~= Player({player}) or '
                               f'string.find(BlzFrameGetText(F("{frame}")), "{text}", 1, true) ~= nil')
 
-    # A new player: one find, the next free reveal after one more
+    # A new player: one find; a sealed cell is only a hint
     learn(game, RED, ['n026'])
     for player in (RED, BLUE):
         game.cmd(player, '-book')
     time.sleep(1)
     findings.check(lua_true(game, 'return BlzFrameIsVisible(F("recipeBookPanel"))'), 'the book did not open on both screens')
     findings.check(text_has('recipeBookTally', 'ffffffff1|r'), 'red\'s tally is not 1 of 27')
-    findings.check(text_has('recipeBookReveal2', 'after 1 more find'), 'red\'s next reveal is not after 1 more find')
-    findings.check(not click_book(game, RED, 'recipeBookCell15'), 'a sealed cell opened with no free reveal')
+    findings.check(text_has('recipeBookReveal2', 'for one Primal, free'), 'the table does not say what filling it earns')
+    findings.check(not click_book(game, RED, 'recipeBookCell15'), 'a click on a sealed cell did something')
     look_at_book(game, 'a new player')
 
-    # Midgame: nine finds earn four reveals; one spent on Water + Water; the Lich King made
-    learn(game, RED, ['u02C', 'u01D', 'u02A', 'n028', 'u030', 'u02E', 'uP01', 'uP06', 'uA01'])
-    revealed = click_book(game, RED, 'recipeBookCell15', 'revealed')
-    findings.check(revealed == 'u034', f'the Water + Water cell revealed {revealed}, not the Water Rune L2 (u034)')
-    findings.check(not click_book(game, RED, 'recipeBookCell1'), 'a known cell did something')
+    # Midgame: ten found, the Lich King made; no Primal free yet
+    learn(game, RED, ['u02C', 'u01D', 'u02A', 'n028', 'u030', 'u02E', 'u034', 'uP01', 'uP06', 'uA01'])
     findings.check(not click_book(game, RED, 'recipeBookPrimal1'), 'a Primal was taken before the table was full')
     findings.check(text_has('recipeBookTally', 'ffffffff10|r'), 'red\'s tally is not 10 of 27')
-    findings.check(text_has('recipeBookReveal1', '3 free reveals'), 'red does not have 3 free reveals left')
     findings.check(text_has('recipeBookAscendedHeader', 'ffffffff1|r'), 'red\'s Ascended are not 1 of 6')
-    # Blue: two finds earn one reveal, for blue's book alone
-    learn(game, BLUE, ['n026', 'u022'])
-    revealed = click_book(game, BLUE, 'recipeBookCell0', 'revealed')
-    findings.check(revealed == 'u02C', f'blue\'s Life + Life cell revealed {revealed}')
-    findings.check(not click_book(game, BLUE, 'recipeBookCell2'), 'blue revealed a second cell with one reveal')
     look_at_book(game, 'midgame')
 
-    # The table full: seven more finds (16, eight reveals, four spent) and the six sealed cells
-    learn(game, RED, ['n030', 'u01E', 'u020', 'u028', 'u025', 'u027', 'u023'])
-    known = {'n026', 'u02C', 'u01D', 'u02A', 'n028', 'u030', 'u02E', 'u034', 'n030', 'u01E', 'u020', 'u028', 'u025',
-             'u027', 'u023'}
-    for index, result in enumerate(BOOK_CELLS):
-        if result not in known:
-            got = click_book(game, RED, f'recipeBookCell{index}', 'revealed')
-            findings.check(got == result, f'cell {index} revealed {got}, not {result}')
+    # Blue fills the table and takes the Lich: blue's book alone
+    learn(game, BLUE, BOOK_CELLS)
+    took = click_book(game, BLUE, 'recipeBookPrimal0', 'took')
+    findings.check(took == 'uP01', f'blue took {took}, not the Lich (uP01)')
+
+    # Red's table full: every first fusion found, one Primal offered, taken once
+    known = {'n026', 'u02C', 'u01D', 'u02A', 'n028', 'u030', 'u02E', 'u034'}
+    learn(game, RED, [cell for cell in BOOK_CELLS if cell not in known])
     findings.check(text_has('recipeBookReveal1', 'Table full'), 'the table is not full')
     findings.check(text_has('recipeBookLedgerSubline', 'click a Primal to take it free'), 'no free Primal is offered')
     look_at_book(game, 'the table full')
@@ -1025,20 +1016,20 @@ def test_recipe_book(game):
     learn(game, RED, ['uP02', 'uP03', 'uP05'] + BOOK_ASCENDED[1:])
     findings.check(text_has('recipeBookTally', 'ffffffff27|r'), 'red\'s tally is not 27 of 27')
     findings.check(lua_true(game, 'return GetLocalPlayer() ~= Player(0) or BlzFrameGetText(F("recipeBookReveal1")) == ""'),
-                   'a complete book still shows a reveal line')
+                   'a complete book still shows a line under the table')
     look_at_book(game, 'complete')
     try:
         game.check_in_step()
     except TestFailed as error:
         findings.append(f'after the clicks: {error}')
 
-    # The next game: what was given and the Ascended made come back; then -forget empties them
+    # The next game: the free Primal and the Ascended made come back; then -forget empties them
     elementalist_game(game, 'recipe-book-loaded')
     game.wait('the books to load', lambda: book_loaded(game, RED, 0) and book_loaded(game, RED, 1), 30)
     for client in range(2):
         book = book_loaded(game, RED, client)
-        findings.check(book == {'known': 27, 'given': 8, 'ascended': 6},
-                       f'client {client + 1}: red\'s book loaded as {book}, not 27 known, 8 given, 6 ascended')
+        findings.check(book == {'known': 27, 'given': 1, 'ascended': 6},
+                       f'client {client + 1}: red\'s book loaded as {book}, not 27 known, 1 given, 6 ascended')
     before = len(game.events('book'))
     game.cmd(RED, '-forget')
     game.wait('the book to empty', lambda: any(' book p0 forgot' in line for line in game.events('book')[before:]), 10)
