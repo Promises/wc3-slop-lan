@@ -373,31 +373,12 @@ def test_lich(game):
     forget_recipes(game)
     game.cmd(RED, '-lives 1000000')
     game.watch(CREEPS)
-    placed = build_in_red_lane(game, ELEMENTALIST_BUILDER, [(f'rune {n + 1}', UNCHARGED_RUNE) for n in range(16)],
-                               findings)
-    spots = [spot for _, spot in placed]
-    game.wait('the runes to stand', lambda: all(unit_at(game, RED, spot, (UNCHARGED_RUNE,)) for spot in spots), 90)
-    offers = {}
-    for spot in spots:
-        levels = game.inspect(unit_at(game, RED, spot, (UNCHARGED_RUNE,))['id'], *ELEMENTS)
-        offers[spot] = [ELEMENTS[a][0] for a in ELEMENTS if levels.get(a, 0) > 0]
-    needs = [['Life', 'Death'], ['Death', 'Death']]
-    met = assign_runes(offers, needs)
-    if len(met) < 2:
-        raise TestFailed(f'the runes rolled no Undead and Death pair: {offers}')
-    by_name = {name: (order, element) for name, order, element in ELEMENTS.values()}
-    charged = {spot: element for i, two in met.items() for spot, element in zip(two, needs[i])}
-    for spot, element in charged.items():
-        game.order(RED, unit_at(game, RED, spot, (UNCHARGED_RUNE,))['id'], by_name[element][0])
-    game.wait('the runes to take their element', lambda: all(unit_at(game, RED, spot, (by_name[element][1],))
-                                                             for spot, element in charged.items()), 20)
-    undead_spot, death_spot = met[0][0], met[1][0]
-    for i, (source_spot, target_spot) in met.items():
-        source = unit_at(game, RED, source_spot, (by_name[needs[i][0]][1],))
-        target = unit_at(game, RED, target_spot, (by_name[needs[i][1]][1],))
-        game.order(RED, source['id'], SIPHON, target['id'])
-    game.wait('Undead and a Death Rune L2', lambda: unit_at(game, RED, undead_spot, (UNDEAD,))
-              and unit_at(game, RED, death_spot, (LEVEL_2['Death'],)), 20)
+    # Undead and a Death Rune L2 put down as built: rolling them from runes needs three runes to
+    # offer Death, which 16 runes miss about one time in 16 (making a fusion from runes is
+    # test_thunderhead's)
+    undead_spot, death_spot = spread_spots(2, 900)
+    place_tower(game, UNDEAD, undead_spot)
+    place_tower(game, LEVEL_2['Death'], death_spot)
     game.upgrade(RED, unit_at(game, RED, death_spot, (LEVEL_2['Death'],))['id'], DEATH_3)
     game.order(RED, unit_at(game, RED, undead_spot, (UNDEAD,))['id'], UNDEAD_UPGRADE)
     game.wait('Undead L2 and Death Rune L3', lambda: unit_at(game, RED, undead_spot, (UNDEAD_2,))
@@ -542,6 +523,8 @@ def test_thunderhead(game):
 
 # Ascension: a Primal at Attunement 15 ascends for a fee; Surge buys Attunement, 60 a level, 10 at most
 EYE_OF_THE_STORM, EYE_FEE, ASCEND, SURGE, SURGE_PRICE, SURGE_LIMIT = 'uA02', 500, 'avatar', 'berserk', 60, 10
+# The Eye's base damage before Attunement (its object data); Ascended growth is 5% of it a wave
+EYE_BASE = 1576
 
 
 def make_thunderhead(game):
@@ -615,8 +598,10 @@ def test_ascension(game):
         play_round(game)
         grown.append(damage(game, eye))
     game.log(f'Eye of the Storm damage by wave: {grown}')
-    # 5% of its base (2,050) a wave
-    findings.check(all(b - a >= 100 for a, b in zip(grown, grown[1:])), f'it did not gain about 5% a wave: {grown}')
+    # 5% of its base a wave, give or take the rounding of the total
+    gain = EYE_BASE * 0.05
+    findings.check(all(abs(b - a - gain) <= 1 for a, b in zip(grown, grown[1:])),
+                   f'it did not gain 5% of its base ({gain:.0f}) a wave: {grown}')
 
     unit = next(u for u in game.units(RED) if u['id'] == eye)
     place_target(game, (unit['x'], unit['y']), 1, 1100, True)
@@ -939,12 +924,14 @@ def tower_classes(game):
     return {f['id']: f['class'] for f in fields}
 
 
-def spread_spots(count, distance):
-    """Spots in red's lane at least `distance` apart, each with the spot to its right free for a second tower."""
+def spread_spots(count, distance, avoid=(), width=1):
+    """Spots in red's lane at least `distance` apart and from the spots in `avoid`, each with the
+    `width` spots to its right free for more towers."""
     spots = red_lane_spots()
     chosen = []
     for x, y in spots:
-        if (x + LANE_SPACING, y) in spots and all(abs(x - cx) + abs(y - cy) >= distance for cx, cy in chosen):
+        if (all((x + n * LANE_SPACING, y) in spots for n in range(1, width + 1))
+                and all(abs(x - cx) + abs(y - cy) >= distance for cx, cy in chosen + list(avoid))):
             chosen.append((x, y))
     if len(chosen) < count:
         raise TestFailed(f'red\'s lane has no {count} spots {distance} apart')
@@ -1143,3 +1130,156 @@ def test_primals(game):
         if 'Nordrassil' in towers:
             findings.check(len(game.events('root')) == roots, 'Nordrassil rooted in a boss wave')
     findings.raise_if_any('the Primals')
+
+
+# The midgame bridge (Elementalist Improvements): stronger burns, Plague's spreading disease, Mist's
+# magic weakness, Tornado's Updraft, Blaze and Bubbles back to runes, Recharge for rocks
+PURGATORY, PURGATORY_2, DECAY, PLAGUE, MIST, TORNADO, BLAZE, BUBBLES = 'n028', 'u039', 'u01E', 'u020', 'u028', 'u022', 'u027', 'u026'
+# Expected damage a second: Purgatory 20 and 150 (immolation), Decay 15 (disease cloud), Plague 50
+PURGATORY_DPS, PURGATORY_2_DPS, DECAY_DPS, PLAGUE_DPS = 20, 150, 15, 50
+# How far from a dying creep Plague spreads (Plague.ts)
+PLAGUE_SPREAD = 300
+WATER_3, AIR_3 = 'u035', 'u033'
+MIST_FACTOR, UPDRAFT_FACTOR = 1.1, 1.2
+RECHARGE, RECHARGE_PRICE = 'rejuvination', 8
+
+
+def attack_rate(hits, source):
+    attacks = [t for t, f in hits if f.get('src') == source and f.get('attack') == 'true']
+    return (len(attacks) - 1) / max((attacks[-1] - attacks[0]) * TICK, TICK) if len(attacks) > 1 else 0
+
+
+def target_near(game, spot, dy=120):
+    return game.create(CREEPS, maul.GROUND_TARGET, spot[0], spot[1] + dy, life=TARGET_LIFE, rooted=True)[0]['id']
+
+
+def test_midgame(game):
+    """The midgame bridge: Purgatory burns 20 and 150 a second, Decay 15; Mist makes a magic
+    tower's hits on its target 10% bigger; Tornado's Updraft speeds a nearby tower's attacks by
+    20%; Blaze and Bubbles turn back into Uncharged Runes; Recharge turns a Depleted Rock into an
+    Uncharged Rune for 8 gold and is refused below; a creep dying near Plague infects the creeps
+    around it."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, 'I024')
+    give_gold(game, (RED,))
+    game.cmd(RED, '-lives 1000000')
+    game.watch(CREEPS)
+    # The burns, Mist and Updraft each measure a tower on a target of its own: far enough apart
+    # that no tower reaches another's target. Recharge, Blaze, Bubbles and Plague come after those
+    # measurements and only need room (Bubbles two spots right of Blaze)
+    spots = spread_spots(5, 900)
+    taken = [(x + n * LANE_SPACING, y) for x, y in spots for n in (0, 1)]
+    spots += spread_spots(3, 2 * LANE_SPACING, taken, width=2)
+    targets = []
+
+    # Burns: each alone with one target
+    burners = {}
+    for (kind, expected), spot in zip(((PURGATORY, PURGATORY_DPS), (PURGATORY_2, PURGATORY_2_DPS), (DECAY, DECAY_DPS)), spots):
+        tower = place_tower(game, kind, spot)
+        burners[kind] = (tower, target_near(game, spot), expected)
+        targets.append(burners[kind][1])
+    hits = watch_hits(game)
+    for kind, (tower, target, expected) in burners.items():
+        burned = [(t, f) for t, f in hits if f.get('dst') == target and f.get('attack') != 'true']
+        seconds = max((burned[-1][0] - burned[0][0]) * TICK, TICK) if len(burned) > 1 else 0
+        rate = round(sum(f.get('raw', 0) for _, f in burned) / seconds) if seconds else 0
+        game.log(f'{kind}: burns {rate} a second (expected {expected})')
+        findings.check(abs(rate - expected) <= expected * 0.25, f'{kind} burns {rate} a second, not about {expected}')
+
+    # Mist: a Water Rune L3's hits on a target, then with Mist hitting the same target
+    water = place_tower(game, WATER_3, spots[3])
+    targets.append(target_near(game, spots[3]))
+    before = per_hit(watch_hits(game, 8), water)
+    place_tower(game, MIST, (spots[3][0] + LANE_SPACING, spots[3][1]))
+    after = per_hit(watch_hits(game, 12), water)
+    game.log(f'Water Rune L3: {before:.0f} a hit, {after:.0f} with Mist on its target')
+    findings.check(abs(after - before * MIST_FACTOR) <= before * 0.03, f'with Mist the Water Rune hits for {after:.0f}, not {before * MIST_FACTOR:.0f}')
+
+    # Updraft: an Air Rune L3's attack rate, then with a Tornado next to it
+    air = place_tower(game, AIR_3, spots[4])
+    targets.append(target_near(game, spots[4]))
+    slow = attack_rate(watch_hits(game, 10), air)
+    place_tower(game, TORNADO, (spots[4][0] + LANE_SPACING, spots[4][1]))
+    fast = attack_rate(watch_hits(game, 10), air)
+    game.log(f'Air Rune L3: {slow:.2f} attacks a second, {fast:.2f} beside a Tornado')
+    findings.check(fast >= slow * (UPDRAFT_FACTOR - 0.08), f'Updraft did not speed the Air Rune up: {slow:.2f} -> {fast:.2f}')
+
+    # Recharge: refused below 8 gold, then a rune for 8
+    rock_spot = spots[5]
+    rock = place_tower(game, DEPLETED_ROCK, rock_spot)
+    game.cmd(RED, '.gold 5')
+    game.wait_for('the gold to be 5', lambda beat: beat.gold(RED) == 5)
+    before_notes = len(game.events('recharge'))
+    game.order(RED, rock, RECHARGE)
+    try:
+        game.wait('the recharge to be refused', lambda: any(' refused ' in line for line in game.events('recharge')[before_notes:]), 10)
+    except TestFailed as error:
+        findings.append(f'Recharge with 5 gold: {error}')
+    game.cmd(RED, '.gold 100')
+    game.wait_for('the gold to be 100', lambda beat: beat.gold(RED) == 100)
+    game.order(RED, rock, RECHARGE)
+    try:
+        game.wait('the rock to become a rune', lambda: unit_at(game, RED, rock_spot, (UNCHARGED_RUNE,)), 15)
+        findings.check(maul.fresh_beat(game).gold(RED) == 100 - RECHARGE_PRICE, f'Recharge did not take {RECHARGE_PRICE} gold')
+    except TestFailed as error:
+        findings.append(f'Recharge with 100 gold: {error}')
+
+    # Blaze and Bubbles back to runes: Blaze after its wave, Bubbles once its damage runs out
+    blaze_spot, bubbles_spot = spots[6], (spots[6][0] + 2 * LANE_SPACING, spots[6][1])
+    place_tower(game, BLAZE, blaze_spot)
+    bubbles = place_tower(game, BUBBLES, bubbles_spot)
+    game.cmd(RED, f'.lua BlzSetUnitBaseDamage(unit({bubbles}), 3, 0) return BlzGetUnitBaseDamage(unit({bubbles}), 0)')
+
+    # Plague: a wave; a creep killed next to others infects them. The targets go first: they are
+    # creeps, and a wave does not end while they stand
+    for target in targets:
+        game.remove(CREEPS, target)
+    place_tower(game, PLAGUE, spots[7])
+    plagued = len(game.events('plague'))
+    maul.start_wave(game)
+    game.wait_for('the wave to spawn', lambda b: (b.get('creeps') or 0) > 0, 30)
+    # Two targets beside a wave creep in red's lane (Plague's reach), then the creep dies: wave
+    # creeps walk too far apart to count on two of them being close
+    min_x, min_y, max_x, max_y = maul.lane_areas()[RED]
+
+    found = []
+
+    def in_lane():
+        found[:] = [u for u in game.units(CREEPS) if u['type'] != maul.GROUND_TARGET
+                    and min_x <= u['x'] <= max_x and min_y <= u['y'] <= max_y]
+        return found
+    game.wait('a wave creep in red\'s lane', in_lane, 30)
+    # Held still and kept from the lane's towers, so the targets stand beside it when it dies
+    creep = found[0]
+    game.cmd(RED, f'.lua PauseUnit(unit({creep["id"]}), true) SetUnitInvulnerable(unit({creep["id"]}), true)')
+    creep = next((u for u in game.units(CREEPS) if u['id'] == creep['id']), creep)
+    beside = [game.create(CREEPS, maul.GROUND_TARGET, creep['x'] + dx, creep['y'], life=TARGET_LIFE, rooted=True)[0]['id']
+              for dx in (-100, 100)]
+    # The game moves a unit off blocked ground, so count the targets that ended up in reach
+    standing = [u for u in game.units(CREEPS) if u['id'] in beside]
+    reach = [u for u in standing if math.hypot(u['x'] - creep['x'], u['y'] - creep['y']) < PLAGUE_SPREAD - 20]
+    game.log(f'Plague: creep at ({creep["x"]:.0f}, {creep["y"]:.0f}), targets at '
+             + ', '.join(f'({u["x"]:.0f}, {u["y"]:.0f})' for u in standing))
+    game.cmd(CREEPS, f'.kill {creep["id"]}')
+    try:
+        # Its own note: the lane's towers keep killing other creeps, each death a note of its own
+        mine = f' creep={creep["id"]} '
+
+        def noted():
+            return next((line for line in game.events('plague')[plagued:] if mine in line), None)
+        game.wait('Plague to infect', noted, 10)
+        infected = noted().split(' plague ', 1)[1]
+        game.log(f'Plague: {infected}')
+        findings.check(reach and int(infected.rsplit(' ', 1)[1]) >= len(reach),
+                       f'Plague infected {infected}, {len(reach)} targets stood within {PLAGUE_SPREAD}')
+    except TestFailed as error:
+        findings.append(f'Plague: {error}')
+    for target in beside:
+        game.remove(CREEPS, target)
+    time.sleep(6)
+    game.cmd(RED, '-killall')
+    game.wait_for('the wave to end', lambda b: b.get('spawning') is False, 60)
+    for spot, name in ((blaze_spot, 'Blaze'), (bubbles_spot, 'Bubbles')):
+        findings.check(unit_at(game, RED, spot, (UNCHARGED_RUNE,)) is not None, f'{name} did not turn back into an Uncharged Rune')
+    findings.raise_if_any('the midgame bridge')
