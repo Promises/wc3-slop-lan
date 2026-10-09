@@ -1967,3 +1967,44 @@ def test_cold_tower_frontmost_in_a_maze(game):
 def creep_positions(game):
     """{id: (x, y)} of every wave creep."""
     return {u['id']: (u['x'], u['y']) for player in WAVE_CREEP_PLAYERS for u in game.units(player)}
+
+
+ARROW_TOWER = 'h042'
+ECHO_DAMAGE = 7
+
+
+def test_damage_from_inside_a_damage_event(game):
+    """Damage dealt from inside a damage event (the .dmgecho hook: an Arrow Tower's every hit deals
+    7 chaos damage more from its on-hit event) is held back by the damage engine and dealt after
+    the event. As Damage Engine 5.A has it, the handler then runs once on its own echo, whose echo
+    is dealt with the handler frozen: two echoes for each attack - not none (lost), not more (the
+    echo echoing itself, which once could hang the game) - and the game goes on. Each echo shows
+    first as a 0-damage hit, the engine taking it off the game to deal it later. (The watcher's raw
+    amount is kept by target, so nested hits muddle it: echoes are told by their amount.)"""
+    findings = Findings()
+    maul.start(game)
+    for player in WAVE_CREEP_PLAYERS:
+        game.watch(player)
+    spot = red_lane_spots()[5]
+    tower = place_tower(game, ARROW_TOWER, spot)
+    game.create(CREEPS, maul.GROUND_TARGET, spot[0], spot[1] + 150, life=TARGET_LIFE, rooted=True)
+    before = len(game.events('echo'))
+    game.cmd(RED, f'.dmgecho {tower} {ECHO_DAMAGE}')
+    game.wait('the echo hook', lambda: len(game.events('echo')) > before, 10)
+    findings.check(' on ' in game.events('echo')[-1], f'the echo hook was refused: {game.events("echo")[-1]}')
+    hits = [f for _, f in watch_hits(game, 10) if f.get('src') == tower]
+    attacks = [f for f in hits if f.get('attack') == 'true']
+    chaos = [f for f in hits if f.get('attack') != 'true' and f.get('atk') == 'chaos']
+    echoes = [f for f in chaos if 0 < f.get('amount', 0) <= ECHO_DAMAGE]
+    held = [f for f in chaos if f.get('amount', 0) == 0]
+    others = [f for f in hits if f not in attacks and f not in echoes and f not in held]
+    game.log(f'{len(attacks)} attacks, {len(echoes)} echoes, {len(held)} held back, {len(others)} other hits')
+    findings.check(len(attacks) >= 5, f'only {len(attacks)} attacks to judge')
+    # The last attack's echoes may fall outside the window
+    findings.check(abs(len(echoes) - 2 * len(attacks)) <= 2,
+                   f'{len(echoes)} echoes for {len(attacks)} attacks, two each expected: lost, or echoed on')
+    findings.check(abs(len(held) - len(echoes)) <= 2, f'{len(held)} held back for {len(echoes)} echoes')
+    findings.check(not others, f'hits from the tower that are neither its attacks nor echoes: {others[:3]}')
+    # The game goes on: a fresh heartbeat
+    maul.fresh_beat(game)
+    findings.raise_if_any('damage from inside a damage event')
