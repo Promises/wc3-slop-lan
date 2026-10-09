@@ -899,8 +899,9 @@ def test_elementalist_runes(game):
 DEPLETED_ROCK = 'n027'
 # Siphon Energy (A0CT), on a level 1 rune: the caster becomes the pair's fusion, the target a rock
 SIPHON = 'web'
-# Pay the Toll (A0BF, Channel): 50 gold and the unit is gone
-PAY_THE_TOLL, TOLL = 'channel', 50
+# Recharge (AP03, Rejuvenation; in place of Pay the Toll since 2026-10-08): 8 gold, and the rock is
+# an Uncharged Rune again
+RECHARGE, RECHARGE_PRICE = 'rejuvination', 8
 
 
 def unit_at(game, player, spot, types):
@@ -908,10 +909,10 @@ def unit_at(game, player, spot, types):
                  and abs(u['y'] - spot[1]) <= 64), None)
 
 
-def test_pay_the_toll_on_a_depleted_rock(game):
-    """Elementalists: one rune siphons another, which turns to a Depleted Rock. Its Pay the Toll is
-    refused, and says so, with less than 50 gold (it once passed in silence), and with the gold it
-    takes 50 and the rock is gone."""
+def test_recharge_a_depleted_rock(game):
+    """Elementalists: one rune siphons another, which turns to a Depleted Rock. Its Recharge is
+    refused, and says so, with less than 8 gold, and with the gold it takes 8 and the rock is an
+    Uncharged Rune again."""
     findings = Findings()
     maul.start(game)
     maul.pick(game, RED, ELEMENTALISTS)
@@ -940,29 +941,30 @@ def test_pay_the_toll_on_a_depleted_rock(game):
     rock = unit_at(game, RED, spots[1], (DEPLETED_ROCK,))
 
     # Short of gold: refused, and the rock stays
-    game.cmd(RED, '.gold 10')
-    game.wait_for('the gold to be 10', lambda beat: beat.gold(RED) == 10)
-    before = len(game.events('toll'))
-    game.order(RED, rock['id'], PAY_THE_TOLL)
+    game.cmd(RED, '.gold 5')
+    game.wait_for('the gold to be 5', lambda beat: beat.gold(RED) == 5)
+    before = len(game.events('recharge'))
+    game.order(RED, rock['id'], RECHARGE)
     try:
-        game.wait('the toll to be refused', lambda: any(' toll p0 refused' in line for line in game.events('toll')[before:]), 10)
+        game.wait('the recharge to be refused',
+                  lambda: any(' recharge p0 refused' in line for line in game.events('recharge')[before:]), 10)
     except TestFailed as error:
-        findings.append(f'with 10 gold: {error}')
-    findings.check(unit_at(game, RED, spots[1], (DEPLETED_ROCK,)) is not None, 'the rock went for 10 gold')
-    findings.check(maul.fresh_beat(game).gold(RED) == 10, 'the refused toll took gold')
+        findings.append(f'with 5 gold: {error}')
+    findings.check(unit_at(game, RED, spots[1], (DEPLETED_ROCK,)) is not None, 'the rock went for 5 gold')
+    findings.check(maul.fresh_beat(game).gold(RED) == 5, 'the refused recharge took gold')
 
-    # With the gold: paid, and the rock is gone (the cooldown of the called-off cast must not stop it)
+    # With the gold: paid, and the rock is a rune (the cooldown of the called-off cast must not stop it)
     game.cmd(RED, '.gold 100')
     game.wait_for('the gold to be 100', lambda beat: beat.gold(RED) == 100)
-    before = len(game.events('toll'))
-    game.order(RED, rock['id'], PAY_THE_TOLL)
+    game.order(RED, rock['id'], RECHARGE)
     try:
-        game.wait('the toll to be paid', lambda: any(' toll p0 paid' in line for line in game.events('toll')[before:]), 10)
-        game.wait('the rock to go', lambda: unit_at(game, RED, spots[1], (DEPLETED_ROCK,)) is None, 10)
-        findings.check(maul.fresh_beat(game).gold(RED) == 100 - TOLL, f'the toll did not take {TOLL} gold')
+        game.wait('the rock to become a rune', lambda: unit_at(game, RED, spots[1], (UNCHARGED_RUNE,)), 15)
+        findings.check(unit_at(game, RED, spots[1], (DEPLETED_ROCK,)) is None, 'the rock is still there')
+        findings.check(maul.fresh_beat(game).gold(RED) == 100 - RECHARGE_PRICE,
+                       f'the recharge did not take {RECHARGE_PRICE} gold')
     except TestFailed as error:
         findings.append(f'with 100 gold: {error}')
-    findings.raise_if_any('Pay the Toll')
+    findings.raise_if_any('Recharge')
 
 
 # Void Cult's Void Priest ----------------------------------------------------------------------------
