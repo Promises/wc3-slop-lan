@@ -1719,3 +1719,163 @@ def test_cold_tower_targets_the_frontmost(game):
     findings.check(not pick_ticks or followed >= 0.7 * len(pick_ticks),
                    f'only {followed} of {len(pick_ticks)} picks were followed by an attack on the picked creep')
     findings.raise_if_any('the Cold Tower')
+
+
+def walker_speed(game, walker, seconds=2.0):
+    """A unit's speed over `seconds` of game time: its position read twice, timed by the trace ticks."""
+    def sample():
+        before = len(game.events('lua'))
+        game.cmd(RED, f'.lua return GetUnitX(unit({walker})) .. " " .. GetUnitY(unit({walker}))')
+        game.wait('a position', lambda: len(game.events('lua')) > before, 10)
+        line = game.events('lua')[before]
+        x, y = line.split(' lua ok ', 1)[1].split()
+        return tick_of(line), float(x), float(y)
+    t1, x1, y1 = sample()
+    time.sleep(seconds)
+    t2, x2, y2 = sample()
+    return math.dist((x1, y1), (x2, y2)) / max((t2 - t1) * TICK, TICK)
+
+
+def test_cold_tower_slow_probe(game):
+    """Probe, kept for the Cold Tower's slow (undecided, 2026-10-09): the two frost attacks on a Cold Tower, against a footman (ground) and a gryphon (air)
+    of a creep player with endless life, walking red's straight leg: their speed, and the buff each
+    frost attack gives (A08X's Slow B017, A0EU's frost Bfro). Each frost attack is added at runtime.
+    With 1 tower and with 6. Judges nothing."""
+    maul.start(game)
+    for player in WAVE_CREEP_PLAYERS:
+        game.watch(player)
+    path = [(x, PATH_Y) for x in (-2300, -3700)]
+    for ability, buff in (('A08X', 'B017'), ('A0EU', 'Bfro')):
+        for count in (1, 6):
+            towers = [place_tower(game, COLD_TOWER, (COLD_TOWER_SPOT[0] - 128 * i, COLD_TOWER_SPOT[1])) for i in range(count)]
+            for tower in towers:
+                lua_value(game, f'return UnitAddAbility(unit({tower}), FourCC("{ability}"))')
+            for kind in ('hfoo', 'hgry'):
+                walker = game.create(13, kind, path[0][0], path[0][1], life=TARGET_LIFE)[0]['id']
+                lua_value(game, f'return IssuePointOrder(unit({walker}), "move", {path[1][0]}, {path[1][1]})')
+                time.sleep(3)
+                speed = walker_speed(game, walker)
+                has = lua_value(game, f'return GetUnitAbilityLevel(unit({walker}), FourCC("{buff}"))')
+                default = lua_value(game, f'return GetUnitDefaultMoveSpeed(unit({walker}))')
+                game.log(f'{ability} x{count}, {kind}: {speed:.0f} a second (default {default}), {buff} level {has}')
+                game.cmd(RED, f'.lua RemoveUnit(unit({walker}))')
+            for tower in towers:
+                game.cmd(RED, f'.lua RemoveUnit(unit({tower}))')
+            time.sleep(1)
+
+
+# A test maze in red's lane, between its first checkpoint (-2432, 4736) and its second
+# (-3584, 4736): three walls of plain Towers across the lane, their gaps at alternate ends, so the
+# creeps walk four passes. A Cold Tower stands in the middle wall and reaches all of them.
+MAZE_WALL = 'hC66'
+MAZE_CHECKPOINTS = ((-2432, 4736), (-3584, 4736))
+MAZE_ROWS = list(range(4032, 5441, 128))
+MAZE_WALLS = ((-2688, 'top'), (-3008, 'bottom'), (-3328, 'top'))
+MAZE_COLD_TOWER = (-3008, 4736)
+
+
+def maze_spots():
+    """The walls' Tower spots: each wall the whole lane high but for two at its gap's end."""
+    spots = []
+    for x, gap in MAZE_WALLS:
+        rows = MAZE_ROWS[:-2] if gap == 'top' else MAZE_ROWS[2:]
+        spots += [(x, y) for y in rows]
+    return spots
+
+
+def path_distances(blocked_centres, area, goal):
+    """Distance along the ground from every 64 cell of the area to the goal, around 128 x 128
+    footprints at the given centres (8 directions, Dijkstra): {(i, j): distance}, and the cell of a point."""
+    import heapq
+    min_x, min_y, max_x, max_y = area
+    columns, rows = int((max_x - min_x) // maul.GRID), int((max_y - min_y) // maul.GRID)
+    centre = lambda i, j: (min_x + maul.GRID / 2 + maul.GRID * i, min_y + maul.GRID / 2 + maul.GRID * j)
+    cell = lambda x, y: (int((x - min_x) // maul.GRID), int((y - min_y) // maul.GRID))
+    blocked = {(i, j) for i in range(columns) for j in range(rows)
+               if any(abs(centre(i, j)[0] - bx) < 64 and abs(centre(i, j)[1] - by) < 64 for bx, by in blocked_centres)}
+    start = cell(*goal)
+    distance = {start: 0.0}
+    queue = [(0.0, start)]
+    while queue:
+        d, (i, j) = heapq.heappop(queue)
+        if d > distance[(i, j)]:
+            continue
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                n = (i + di, j + dj)
+                if (di or dj) and 0 <= n[0] < columns and 0 <= n[1] < rows and n not in blocked:
+                    # No corner cutting past a footprint
+                    if di and dj and ((i + di, j) in blocked or (i, j + dj) in blocked):
+                        continue
+                    nd = d + maul.GRID * (1.414 if di and dj else 1)
+                    if nd < distance.get(n, float('inf')):
+                        distance[n] = nd
+                        heapq.heappush(queue, (nd, n))
+    return distance, cell
+
+
+def test_cold_tower_frontmost_in_a_maze(game):
+    """The Cold Tower attacks the creep furthest along the path even where the path winds back
+    past it: a maze of four passes in red's lane, the tower in its middle wall, a wave walking it.
+    Each pick it makes is held up against the distance left along the ground to the maze's exit
+    (Dijkstra over the 64 grid around the towers): the picked creep is the one with the least, give
+    or take two cells, among those the pick's note lists (its best eight)."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    for player in WAVE_CREEP_PLAYERS:
+        game.watch(player)
+    game.cmd(RED, '-lives 1000000')
+    walls = maze_spots()
+    for spot in walls:
+        if spot != MAZE_COLD_TOWER:
+            place_tower(game, MAZE_WALL, spot)
+    tower = place_tower(game, COLD_TOWER, MAZE_COLD_TOWER)
+    # Hardly any damage, so the creeps live to walk the whole maze and the front changes hands as
+    # each leader walks out of reach
+    lua_value(game, f'BlzSetUnitBaseDamage(unit({tower}), 10, 0) return true')
+    area = maul.lane_areas()[RED]
+    distance, cell = path_distances(walls, area, MAZE_CHECKPOINTS[1])
+    entry = distance[cell(*MAZE_CHECKPOINTS[0])]
+    game.log(f'maze: {len(walls)} spots, {entry:.0f} along the ground from checkpoint to checkpoint '
+             f'({MAZE_CHECKPOINTS[0][0] - MAZE_CHECKPOINTS[1][0]} straight)')
+    findings.check(entry > 2 * (MAZE_CHECKPOINTS[0][0] - MAZE_CHECKPOINTS[1][0]), 'the maze does not wind')
+
+    def left(x, y):
+        """Distance left to the maze's exit: east of the first checkpoint a creep has yet to reach it."""
+        if x > MAZE_CHECKPOINTS[0][0] + 32:
+            return math.dist((x, y), MAZE_CHECKPOINTS[0]) + entry
+        return distance.get(cell(x, y), float('inf'))
+
+    game.cmd(RED, '-wave 2')
+    time.sleep(1)
+    notes = len(game.events('target'))
+    seen_y = []
+    maul.start_wave(game)
+    for _ in range(45):
+        time.sleep(1)
+        seen_y += [p[1] for p in creep_positions(game).values()
+                   if area[0] < p[0] < MAZE_CHECKPOINTS[0][0] and area[1] < p[1] < area[3]]
+    game.log(f'creeps in the maze stood between y {min(seen_y, default=0):.0f} and {max(seen_y, default=0):.0f}')
+    picks = front_picks(game, tower, notes)
+    judged, wrong = 0, []
+    for picked, cands in picks:
+        if len(cands) < 2 or not any(ref == picked for ref, _, _ in cands):
+            continue
+        lefts = {ref: left(x, y) for ref, x, y in cands}
+        if any(v == float('inf') for v in lefts.values()):
+            continue
+        judged += 1
+        if lefts[picked] > min(lefts.values()) + 2 * maul.GRID:
+            wrong.append((picked, {ref: round(v) for ref, v in lefts.items()}))
+    game.log(f'{len(picks)} picks, {judged} judged, {len(wrong)} not the creep furthest along')
+    for picked, lefts in wrong[:4]:
+        game.log(f'  picked {picked}: distance left {lefts}')
+    findings.check(judged >= 8, f'only {judged} picks to judge')
+    findings.check(not wrong, f'{len(wrong)} of {judged} picks were not the creep furthest along the maze')
+    findings.raise_if_any('the Cold Tower in a maze')
+
+
+def creep_positions(game):
+    """{id: (x, y)} of every wave creep."""
+    return {u['id']: (u['x'], u['y']) for player in WAVE_CREEP_PLAYERS for u in game.units(player)}
