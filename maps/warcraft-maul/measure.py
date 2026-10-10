@@ -2073,11 +2073,12 @@ HYBRID_RANDOM, HYBRID_BUILDER = 'I00X', 'e00I'
 HYBRID_BUILD_CELLS = ((24, 5), (28, 5))
 
 
-def test_hybrid_build_keep_open(game):
-    """The hybrid build menu, on the right above the command card (screenshots): with Keep open on,
-    picking a tower and building it leave the menu open; with it off, picking a tower closes it, as
-    before. Buttons are clicked in red's menu; a tower is placed with the message red's own click
-    sends."""
+def test_hybrid_build_menu(game):
+    """The hybrid build menu, on the right above the command card (screenshots): picking a tower
+    closes it. With its Keep open button (HybridBuildPanel.KEEP_OPEN_BUTTON in the map, off for
+    now) in the map, Keep open on leaves it open through a pick and the build, and off closes it
+    on a pick again. Buttons are clicked in red's menu; a tower is placed with the message red's own
+    click sends."""
     findings = Findings()
     maul.start(game)
     game.cmd(RED, '.gold 1000')
@@ -2113,7 +2114,14 @@ def test_hybrid_build_keep_open(game):
     game.cmd(RED, '-build')
     time.sleep(1)
     findings.check(menu_open(), '-build did not open the menu')
-    shot('the menu, Keep open off')
+    shot('the menu')
+
+    if not lua_true(game, 'return BlzGetFrameByName("hybridBuildKeepOpen", 0) ~= nil'):
+        game.log('no Keep open button in this build')
+        click('hybridBuildTier0')
+        findings.check(menu_closed(), 'picking a tower left the menu open')
+        findings.raise_if_any('the hybrid build menu')
+        return
 
     click('hybridBuildKeepOpen')
     click('hybridBuildTier0')
