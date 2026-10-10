@@ -1852,6 +1852,56 @@ def test_race_picker_tabs(game):
     findings.raise_if_any('the race picker')
 
 
+
+# The picks with a guide in the race picker (wc3-ts-template RaceGuides.ts): their tab, and their
+# row's text, with which match of it to click (the Random tab and the Random pick share a name)
+GUIDED_PICKS = (('Random', 'Random', 2), ('Random', 'Hardcore Random', 1), ('Random', 'Hybrid Random', 1),
+                ('Beginner', 'Human Town Hall', 1), ('Advanced', 'The Elementalists', 1))
+
+
+def test_race_guides(game):
+    """Screenshots of red's race picker with each pick that has a guide shown in its information
+    pane - the three random picks, Human Town Hall and the Elementalists - for looking at whether
+    each guide fits the pane and is not under the scoreboard (folded while the picker is open), and
+    one once the picker is closed, the scoreboard back. A tab and a row are clicked by their text
+    among the panel's buttons."""
+    findings = Findings()
+    maul.start(game)
+    # The n-th of the panel's buttons whose text, without colour codes, is t; red's click on it.
+    # Frame texts are local, so a check reads "not red, or ...": both clients note the same line.
+    # (One short line each: a command line is cut at chat length.)
+    lua_value(game, '_G.plain = function(s) return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end return true')
+    lua_value(game, '_G.kid = function(i) return BlzFrameGetChild(BlzGetFrameByName("raceSelectPanel", 0), i) end return true')
+    lua_value(game, '_G.nth = function(t, n) for i = 0, BlzFrameGetChildrenCount(BlzGetFrameByName("raceSelectPanel", 0)) - 1 do '
+                    'local s = BlzFrameGetText(kid(i)) if s and plain(s) == t then n = n - 1 if n == 0 then return kid(i) end end end end return true')
+    lua_value(game, '_G.clk = function(t, n) if GetLocalPlayer() ~= Player(0) then return true end local c = nth(t, n) '
+                    'if c then BlzFrameClick(c) end return c ~= nil end return true')
+    for tab, pick, match in GUIDED_PICKS:
+        if not lua_true(game, f'return clk("{tab}", 1)'):
+            findings.append(f'no {tab} tab')
+            continue
+        time.sleep(0.5)
+        if not lua_true(game, f'return clk("{pick}", {match})'):
+            findings.append(f'no {pick} row in the {tab} tab')
+            continue
+        time.sleep(0.5)
+        findings.check(lua_true(game, 'return GetLocalPlayer() ~= Player(0) or '
+                                      f'plain(BlzFrameGetText(BlzGetFrameByName("raceSelectInfoName", 0))) == "{pick}"'),
+                       f'clicked {pick}, the pane shows another pick')
+        try:
+            game.log(f'{pick}: {game.screenshot(0)}')
+        except TestFailed as problem:
+            game.log(f'no screenshot of {pick}: {problem}')
+    # The scoreboard folds while the picker is open (it covers the pane) and comes back when it closes
+    lua_true(game, 'if GetLocalPlayer() == Player(0) then BlzFrameClick(BlzGetFrameByName("raceSelectClose", 0)) end return true')
+    time.sleep(1)
+    try:
+        game.log(f'the picker closed, the scoreboard back: {game.screenshot(0)}')
+    except TestFailed as problem:
+        game.log(f'no screenshot of the closed picker: {problem}')
+    findings.raise_if_any('race guides')
+
+
 # A test maze in red's lane, between its first checkpoint (-2432, 4736) and its second
 # (-3584, 4736): three walls of plain Towers across the lane, their gaps at alternate ends, so the
 # creeps walk four passes. A Cold Tower stands in the middle wall and reaches all of them.
