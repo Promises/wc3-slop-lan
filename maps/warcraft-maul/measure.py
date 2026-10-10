@@ -2269,28 +2269,40 @@ POWER_TOWERS = (('Haboob', 'uP03', (-2688, 4864), 'Hits up to 8 targets'),
 
 
 def test_power_button(game):
-    """A Primal's and an Ascended's Power button says what the tower does and what it has gained:
-    its tooltip (read back from the game) has the tower's own description, its Attunement, and its
-    damage now - a burn for the Firelord - and after a wave its Attunement is 1 and an Ascended's
-    growth counts the wave. A screenshot with the Lich King selected, for the button's place."""
+    """A Primal's and an Ascended's Power says what the tower does and what it has gained, in the
+    tooltip red sees with the tower selected (the game shows an ability's tooltip, not a tower's
+    own copy, so the map sets red's view of it on selection): the tower's own description, its
+    Attunement and its damage now - a burn for the Firelord - and after a wave Attunement 1, and an
+    Ascended's growth counting the wave. A Haboob's multishot says 8 targets the same way, a
+    Sandstorm selected after it 7 again, and a screenshot shows the Lich King's command card."""
     findings = Findings()
     maul.start(game)
     maul.pick(game, RED, HUMAN_TOWN_HALL)
     towers = {name: place_tower(game, kind, spot) for name, kind, spot, _ in POWER_TOWERS}
-    lua_value(game, '_G.power = function(id) return BlzGetAbilityStringLevelField(BlzGetUnitAbility(unit(id), '
-                    'FourCC("AP04")), ABILITY_SLF_TOOLTIP_NORMAL_EXTENDED, 0) end return true')
 
-    def has(name, phrase):
-        return lua_true(game, f'return string.find(power({towers[name]}), "{phrase}", 1, true) ~= nil')
+    def select(name):
+        lua_true(game, f'if GetLocalPlayer() == Player(0) then ClearSelection() SelectUnit(unit({towers[name]}), true) end return true')
+        time.sleep(1)
+
+    # What red's screen shows; "not red, or ..." notes the same line on both clients when it holds
+    def shows(ability, phrase):
+        return lua_true(game, f'return GetLocalPlayer() ~= Player(0) or string.find(BlzGetAbilityExtendedTooltip('
+                              f'FourCC("{ability}"), 0), "{phrase}", 1, true) ~= nil')
 
     for name, kind, spot, own in POWER_TOWERS:
-        findings.check(has(name, own), f'the {name}\'s Power tooltip lacks its description ("{own}")')
-        findings.check(has(name, 'Attunement: |cffffcc000|r / 15'), f'the {name}\'s Power tooltip does not say Attunement 0')
+        select(name)
+        findings.check(shows('AP04', own), f'the {name}\'s Power tooltip lacks its description ("{own}")')
+        findings.check(shows('AP04', 'Attunement: |cffffcc000|r / 15'), f'the {name}\'s Power tooltip does not say Attunement 0')
         now = 'Burns now' if name == 'Firelord' else 'Damage now'
-        findings.check(has(name, now), f'the {name}\'s Power tooltip does not say "{now}"')
-    game.log('the Lich King\'s Power tooltip: ' + lua_value(game, f'return power({towers["Lich King"]})'))
-    lua_true(game, f'if GetLocalPlayer() == Player(0) then SelectUnit(unit({towers["Lich King"]}), true) end return true')
-    time.sleep(1)
+        findings.check(shows('AP04', now), f'the {name}\'s Power tooltip does not say "{now}"')
+        if name == 'Haboob':
+            findings.check(shows('A0E4', 'hit 8 enemies'), 'the Haboob\'s multishot tooltip does not say 8')
+    # A Sandstorm after the Haboob: the multishot's own tooltip again (7)
+    towers['Sandstorm'] = place_tower(game, 'u024', (-3328, 4608))
+    select('Haboob')
+    select('Sandstorm')
+    findings.check(shows('A0E4', 'hit 7 enemies'), 'a Sandstorm selected after the Haboob does not say 7')
+    select('Lich King')
     try:
         game.log(f'the Lich King selected: {game.screenshot(0)}')
     except TestFailed as problem:
@@ -2307,9 +2319,11 @@ def test_power_button(game):
     lua_value(game, 'creeps(KillUnit) return true')
     game.wait_for('the wave to end', lambda b: not b.get('spawning') and (b.get('creeps') or 0) == 0, 60)
     time.sleep(2)
+    # The Lich King stayed selected through the wave: its tooltip followed it
+    findings.check(shows('AP04', 'Attunement: |cffffcc001|r / 15'), 'the selected Lich King\'s tooltip did not follow the wave')
     for name, kind, spot, own in POWER_TOWERS:
-        findings.check(has(name, 'Attunement: |cffffcc001|r / 15'), f'after a wave the {name}\'s Power tooltip does not say Attunement 1')
+        select(name)
+        findings.check(shows('AP04', 'Attunement: |cffffcc001|r / 15'), f'after a wave the {name}\'s Power tooltip does not say Attunement 1')
         if kind.startswith('uA'):
-            findings.check(has(name, 'Ascended for 1 wave'), f'after a wave the {name}\'s Power tooltip does not count it')
-    game.log('after a wave: ' + lua_value(game, f'return power({towers["Firelord"]})'))
+            findings.check(shows('AP04', 'Ascended for 1 wave'), f'after a wave the {name}\'s Power tooltip does not count it')
     findings.raise_if_any('the Power button')
