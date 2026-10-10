@@ -2065,3 +2065,68 @@ def test_damage_from_inside_a_damage_event(game):
     # The game goes on: a fresh heartbeat
     maul.fresh_beat(game)
     findings.raise_if_any('damage from inside a damage event')
+
+
+HYBRID_RANDOM, HYBRID_BUILDER = 'I00X', 'e00I'
+# A free 2x2 of cells in red's maze (its area's corner is -4224, 3968; cells are 64): clear of
+# both checkpoints (y 4736)
+HYBRID_BUILD_CELLS = ((24, 5), (28, 5))
+
+
+def test_hybrid_build_keep_open(game):
+    """The hybrid build menu, on the right above the command card (screenshots): with Keep open on,
+    picking a tower and building it leave the menu open; with it off, picking a tower closes it, as
+    before. Buttons are clicked in red's menu; a tower is placed with the message red's own click
+    sends."""
+    findings = Findings()
+    maul.start(game)
+    game.cmd(RED, '.gold 1000')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == 1000)
+    before = len(game.events('hybrid'))
+    maul.sync(game, RED, f'race-pick:{HYBRID_RANDOM}')
+    game.wait('Hybrid Random to hand out towers', lambda: any(' hybrid p0 ' in line for line in game.events('hybrid')[before:]), 20)
+    game.wait('the hybrid builder', lambda: any(u['type'] == HYBRID_BUILDER for u in game.units(RED)), 15)
+
+    def shot(what):
+        try:
+            game.log(f'{what}: {game.screenshot(0)}')
+        except TestFailed as problem:
+            game.log(f'no screenshot, {what}: {problem}')
+
+    def click(name):
+        lua_true(game, f'if GetLocalPlayer() == Player(0) then BlzFrameClick(BlzGetFrameByName("{name}", 0)) end return true')
+        time.sleep(0.7)
+
+    # Frame visibility is local: "not red, or ..." notes the same line on both clients when it holds
+    def menu_open():
+        return lua_true(game, 'return GetLocalPlayer() ~= Player(0) or BlzFrameIsVisible(BlzGetFrameByName("hybridBuildPanel", 0))')
+
+    def menu_closed():
+        return lua_true(game, 'return GetLocalPlayer() ~= Player(0) or not BlzFrameIsVisible(BlzGetFrameByName("hybridBuildPanel", 0))')
+
+    def build(cell):
+        count = len(game.units(RED))
+        maul.sync(game, RED, f'build:0:{cell[0]}:{cell[1]}:0:0')
+        game.wait(f'a tower at cell {cell}', lambda: len(game.units(RED)) > count, 15)
+        time.sleep(0.7)
+
+    game.cmd(RED, '-build')
+    time.sleep(1)
+    findings.check(menu_open(), '-build did not open the menu')
+    shot('the menu, Keep open off')
+
+    click('hybridBuildKeepOpen')
+    click('hybridBuildTier0')
+    findings.check(menu_open(), 'with Keep open on, picking a tower closed the menu')
+    shot('Keep open on, a tower picked')
+    try:
+        build(HYBRID_BUILD_CELLS[0])
+        findings.check(menu_open(), 'with Keep open on, building the tower closed the menu')
+    except TestFailed as error:
+        findings.append(f'with Keep open on: {error}')
+
+    click('hybridBuildKeepOpen')
+    click('hybridBuildTier0')
+    findings.check(menu_closed(), 'with Keep open off, picking a tower left the menu open')
+    shot('Keep open off, a tower picked')
+    findings.raise_if_any('the hybrid build menu')
