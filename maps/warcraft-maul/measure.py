@@ -2214,3 +2214,49 @@ def test_autocast_on_from_the_start(game):
         game.log(f'{name:24} {count} casts')
         findings.check(count > 0, f'the {name} never cast {ability}: its autocast is not on')
     findings.raise_if_any('autocast')
+
+
+DORMANT_EGG, PHOENIX_EGG, AWAKEN, AWAKEN_PRICE = 'u01D', 'h006', 'neutralspell', 250
+EGG_SPOTS = ((-2688, 4864), (-3008, 4864))
+
+
+def test_dormant_egg_awaken(game):
+    """The Dormant Phoenix Egg's Awaken: 250 gold at once, to skip the wait, and free once the egg
+    has gained 5 mana, one a wave. A fresh egg awakens into a Phoenix Egg for 250; an egg at 4 mana
+    reaches 5 at the end of a wave and awakens for nothing."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    game.cmd(RED, '.gold 1000')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == 1000)
+    eggs = [place_tower(game, DORMANT_EGG, spot) for spot in EGG_SPOTS]
+
+    def awaken(egg, spot, price, what):
+        before = maul.fresh_beat(game).gold(RED)
+        game.order(RED, egg, AWAKEN)
+        try:
+            game.wait(f'{what} to awaken', lambda: unit_at(game, RED, spot, (PHOENIX_EGG,)), 10)
+        except TestFailed as error:
+            findings.append(f'{what}: {error}')
+            return
+        paid = before - maul.fresh_beat(game).gold(RED)
+        game.log(f'{what} awakened for {paid}')
+        findings.check(paid == price, f'{what} awakened for {paid} gold, not {price}')
+
+    awaken(eggs[0], EGG_SPOTS[0], AWAKEN_PRICE, 'a fresh egg')
+    # Four waves' mana, and the fifth from a wave's end
+    lua_value(game, f'SetUnitState(unit({eggs[1]}), UNIT_STATE_MANA, 4) return true')
+    game.cmd(RED, '-wave 1')
+    time.sleep(1)
+    maul.start_wave(game)
+    game.wait_for('the wave to spawn', lambda b: (b.get('creeps') or 0) > 0, 30)
+    time.sleep(3)
+    lua_value(game, '_G.creeps = function(f) for p = 13, 16 do local g = CreateGroup() GroupEnumUnitsOfPlayer(g, Player(p), nil) '
+                    'ForGroup(g, function() f(GetEnumUnit()) end) DestroyGroup(g) end end return true')
+    lua_value(game, 'creeps(KillUnit) return true')
+    game.wait_for('the wave to end', lambda b: not b.get('spawning') and (b.get('creeps') or 0) == 0, 60)
+    time.sleep(2)
+    mana = lua_value(game, f'return math.floor(GetUnitState(unit({eggs[1]}), UNIT_STATE_MANA))')
+    findings.check(mana == '5', f'the egg has {mana} mana after the wave, not 5')
+    awaken(eggs[1], EGG_SPOTS[1], 0, 'an egg at 5 mana')
+    findings.raise_if_any('Awaken')
