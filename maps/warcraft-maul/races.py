@@ -909,26 +909,22 @@ def unit_at(game, player, spot, types):
                  and abs(u['y'] - spot[1]) <= 64), None)
 
 
-def test_recharge_a_depleted_rock(game):
-    """Elementalists: one rune siphons another, which turns to a Depleted Rock. Its Recharge is
-    refused, and says so, with less than 8 gold, and with the gold it takes 8 and the rock is an
-    Uncharged Rune again."""
-    findings = Findings()
-    maul.start(game)
-    maul.pick(game, RED, ELEMENTALISTS)
-    game.cmd(RED, f'.gold {GOLD}')
-    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
+def siphoned_pair(game, findings, avoid=()):
+    """Two Uncharged Runes built in red's lane, each charged with one of its two elements, and the
+    first siphoned onto the second: (their spots, the fusion's element pair, the rock). The
+    elements are the first pair the runes offer that is not in avoid (pairs of element names)."""
     placed = build_in_red_lane(game, ELEMENTALIST_BUILDER, [('rune 1', UNCHARGED_RUNE), ('rune 2', UNCHARGED_RUNE)],
                                findings)
     findings.raise_if_any('building the runes')
     spots = [spot for _, spot in placed]
     game.wait('both runes to stand', lambda: all(unit_at(game, RED, spot, (UNCHARGED_RUNE,)) for spot in spots), 60)
-    # Each takes the first of its two charges
+    # Each takes one of its two charges
+    runes = [unit_at(game, RED, spot, (UNCHARGED_RUNE,)) for spot in spots]
+    offers = [[a for a in ELEMENTS if game.inspect(rune['id'], *ELEMENTS).get(a, 0) > 0] for rune in runes]
+    pick = next(((a, b) for a in offers[0] for b in offers[1]
+                 if {ELEMENTS[a][0], ELEMENTS[b][0]} not in [set(pair) for pair in avoid]), (offers[0][0], offers[1][0]))
     elements = []
-    for spot in spots:
-        rune = unit_at(game, RED, spot, (UNCHARGED_RUNE,))
-        levels = game.inspect(rune['id'], *ELEMENTS)
-        ability = next(a for a in ELEMENTS if levels.get(a, 0) > 0)
+    for rune, ability in zip(runes, pick):
         name, order, element = ELEMENTS[ability]
         game.order(RED, rune['id'], order)
         elements.append(element)
@@ -939,6 +935,19 @@ def test_recharge_a_depleted_rock(game):
     game.order(RED, source['id'], SIPHON, target['id'])
     game.wait('the siphoned rune to turn to rock', lambda: unit_at(game, RED, spots[1], (DEPLETED_ROCK,)), 15)
     rock = unit_at(game, RED, spots[1], (DEPLETED_ROCK,))
+    return spots, elements, rock
+
+
+def test_recharge_a_depleted_rock(game):
+    """Elementalists: one rune siphons another, which turns to a Depleted Rock. Its Recharge is
+    refused, and says so, with less than 8 gold, and with the gold it takes 8 and the rock is an
+    Uncharged Rune again."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, ELEMENTALISTS)
+    game.cmd(RED, f'.gold {GOLD}')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
+    spots, elements, rock = siphoned_pair(game, findings)
 
     # Short of gold: refused, and the rock stays
     game.cmd(RED, '.gold 5')
@@ -965,6 +974,38 @@ def test_recharge_a_depleted_rock(game):
     except TestFailed as error:
         findings.append(f'with 100 gold: {error}')
     findings.raise_if_any('Recharge')
+
+
+# What an Uncharged Rune costs: all a fusion of two runes was paid
+RUNE_PRICE = 8
+# The first fusions that cannot be sold (no sell ability): Moss and the Sapling; nor can the rock
+UNSELLABLE_PAIRS = (('Nature', 'Water'), ('Life', 'Nature'))
+
+
+def test_elementalist_fusion_sells_for_what_it_cost(game):
+    """Elementalists: a fusion of two runes sells for the 8 gold its rune was bought for (the other
+    rune's 8 stays with the rock, which cannot be sold) and no more: a free change of type (taking
+    an element, a fusion) once added the new type's gold cost, so most Elementalist towers sold
+    for more than they cost. Sold in the build phase it was bought in, so in full."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, ELEMENTALISTS)
+    game.cmd(RED, f'.gold {GOLD}')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == GOLD)
+    spots, elements, rock = siphoned_pair(game, findings, avoid=UNSELLABLE_PAIRS)
+    fused = next(u for u in game.units(RED) if u['type'] not in (ELEMENTALIST_BUILDER, DEPLETED_ROCK)
+                 and abs(u['x'] - spots[0][0]) <= 64 and abs(u['y'] - spots[0][1]) <= 64)
+    what = f'the fusion of {elements[0]} and {elements[1]} ({fused["type"]})'
+    before = maul.fresh_beat(game).gold(RED)
+    try:
+        maul.sell(game, RED, [fused['id']])
+        game.wait_for('the gold to change', lambda beat: beat.gold(RED) != before, 10)
+        got = maul.fresh_beat(game).gold(RED) - before
+        game.log(f'{what} sold for {got}')
+        findings.check(got == RUNE_PRICE, f'{what} sold for {got}, its rune cost {RUNE_PRICE}')
+    except TestFailed as error:
+        findings.append(f'{what}: {error}')
+    findings.raise_if_any('Elementalist sell values')
 
 
 # Void Cult's Void Priest ----------------------------------------------------------------------------
