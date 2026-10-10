@@ -2138,3 +2138,79 @@ def test_hybrid_build_menu(game):
     findings.check(menu_closed(), 'with Keep open off, picking a tower left the menu open')
     shot('Keep open off, a tower picked')
     findings.raise_if_any('the hybrid build menu')
+
+
+# Every Primal, beside the line red's wave walks between its two checkpoints (y 4736), the Heart
+# of Life (melee) a cell from it
+WAVE_PRIMALS = (('Lich', 'uP01', (-2688, 4864)), ('Thunderhead', 'uP02', (-2688, 4608)),
+                ('Haboob', 'uP03', (-3008, 4864)), ('Heart of Life', 'uP04', (-3008, 4608)),
+                ('World Tree', 'uP05', (-3328, 4864)), ('Inferno', 'uP06', (-3328, 4608)))
+# Wave creeps' life while the Primals are watched, so no Primal kills the wave before the others reach it
+WAVE_LIFE = 50_000_000
+
+
+def test_primals_attack_a_wave(game):
+    """Every Primal, just made, attacks a real ground wave (wave 2) walking past it - a player's
+    Primal "did nothing", so this looks beyond the test targets the other Primal tests use - but
+    the Thunderhead, which attacks air only and must leave it (test_thunderhead sees it strike air).
+    The creeps' life is raised so that every Primal gets to reach them."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    for player in WAVE_CREEP_PLAYERS:
+        game.watch(player)
+    towers = {name: place_tower(game, kind, spot) for name, kind, spot in WAVE_PRIMALS}
+    # creeps(f): f on every wave creep, the four creep players' units (one short line each: a
+    # command line is cut at chat length)
+    lua_value(game, '_G.creeps = function(f) for p = 13, 16 do local g = CreateGroup() GroupEnumUnitsOfPlayer(g, Player(p), nil) '
+                    'ForGroup(g, function() f(GetEnumUnit()) end) DestroyGroup(g) end end return true')
+    raise_life = f'creeps(function(u) BlzSetUnitMaxHP(u, {WAVE_LIFE}) SetWidgetLife(u, {WAVE_LIFE}) end) return true'
+    game.cmd(RED, '-wave 2')
+    time.sleep(1)
+    maul.start_wave(game)
+    game.wait_for('the wave to spawn', lambda b: (b.get('creeps') or 0) > 0, 30)
+    lua_value(game, raise_life)
+    time.sleep(3)
+    lua_value(game, raise_life)
+    # Ground by most of the creep players' units (one flying unit comes with it)
+    counts = lua_value(game, 'local all, fly = 0, 0 creeps(function(u) all = all + 1 '
+                             'if IsUnitType(u, UNIT_TYPE_FLYING) then fly = fly + 1 end end) return fly .. "/" .. all')
+    fly, total = (int(n) for n in counts.split('/'))
+    findings.check(fly * 2 < total, f'wave 2 is not a ground wave: {counts} flying')
+    hits = [f for _, f in watch_hits(game, 30)]
+    for name, kind, spot in WAVE_PRIMALS:
+        count = sum(1 for f in hits if f.get('src') == towers[name])
+        game.log(f'{name:14} {count} hits')
+        if name == 'Thunderhead':
+            findings.check(count == 0, f'the Thunderhead hit a ground wave {count} times; it attacks air only')
+        else:
+            findings.check(count > 0, f'the {name} did not hit the wave')
+    findings.raise_if_any('Primals against a wave')
+
+
+# Towers with an autocast ability, and that ability (the map switches it on as a tower is set up,
+# Autocast.ts): Arachnid's Parasite (its class casts it on attacks too) and the Chaos Warlock's
+# Bloodlust. (The Dragons' Slow cannot be switched to autocast; their class casts it, see todo.md.)
+AUTOCAST_TOWERS = (('Arachnid Parasite', 'o01A', 'A01I'), ('Chaos Warlock Bloodlust', 'o005', 'A004'))
+
+
+def test_autocast_on_from_the_start(game):
+    """A tower's autocast ability is on as it stands, with nobody switching it on: each of these
+    towers, beside a target, casts its ability by itself (a player had to turn Arachnid's
+    Parasitic Bite on for every tower)."""
+    findings = Findings()
+    maul.start(game)
+    game.watch_casts(RED)
+    spots = red_lane_spots()
+    towers = {}
+    for index, (name, kind, ability) in enumerate(AUTOCAST_TOWERS):
+        spot = spots[5 + 6 * index]
+        towers[name] = place_tower(game, kind, spot)
+        game.create(CREEPS, maul.GROUND_TARGET, spot[0], spot[1] + 150, life=TARGET_LIFE, rooted=True)
+    time.sleep(20)
+    casts = game.casts()
+    for name, kind, ability in AUTOCAST_TOWERS:
+        count = sum(1 for c in casts if c.get('src') == towers[name] and c.get('ability') == ability)
+        game.log(f'{name:24} {count} casts')
+        findings.check(count > 0, f'the {name} never cast {ability}: its autocast is not on')
+    findings.raise_if_any('autocast')
