@@ -2260,3 +2260,56 @@ def test_dormant_egg_awaken(game):
     findings.check(mana == '5', f'the egg has {mana} mana after the wave, not 5')
     awaken(eggs[1], EGG_SPOTS[1], 0, 'an egg at 5 mana')
     findings.raise_if_any('Awaken')
+
+
+# A Primal and two Ascended (one whose power is a burn), and a phrase each one's own text has
+POWER_TOWERS = (('Haboob', 'uP03', (-2688, 4864), 'Hits up to 8 targets'),
+                ('Lich King', 'uA01', (-3008, 4864), 'The Lich, ascended'),
+                ('Firelord', 'uA06', (-3328, 4864), 'The Inferno, ascended'))
+
+
+def test_power_button(game):
+    """A Primal's and an Ascended's Power button says what the tower does and what it has gained:
+    its tooltip (read back from the game) has the tower's own description, its Attunement, and its
+    damage now - a burn for the Firelord - and after a wave its Attunement is 1 and an Ascended's
+    growth counts the wave. A screenshot with the Lich King selected, for the button's place."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    towers = {name: place_tower(game, kind, spot) for name, kind, spot, _ in POWER_TOWERS}
+    lua_value(game, '_G.power = function(id) return BlzGetAbilityStringLevelField(BlzGetUnitAbility(unit(id), '
+                    'FourCC("AP04")), ABILITY_SLF_TOOLTIP_NORMAL_EXTENDED, 0) end return true')
+
+    def has(name, phrase):
+        return lua_true(game, f'return string.find(power({towers[name]}), "{phrase}", 1, true) ~= nil')
+
+    for name, kind, spot, own in POWER_TOWERS:
+        findings.check(has(name, own), f'the {name}\'s Power tooltip lacks its description ("{own}")')
+        findings.check(has(name, 'Attunement: |cffffcc000|r / 15'), f'the {name}\'s Power tooltip does not say Attunement 0')
+        now = 'Burns now' if name == 'Firelord' else 'Damage now'
+        findings.check(has(name, now), f'the {name}\'s Power tooltip does not say "{now}"')
+    game.log('the Lich King\'s Power tooltip: ' + lua_value(game, f'return power({towers["Lich King"]})'))
+    lua_true(game, f'if GetLocalPlayer() == Player(0) then SelectUnit(unit({towers["Lich King"]}), true) end return true')
+    time.sleep(1)
+    try:
+        game.log(f'the Lich King selected: {game.screenshot(0)}')
+    except TestFailed as problem:
+        game.log(f'no screenshot: {problem}')
+
+    # A wave goes by: Attunement 1, and the Ascended grow by it
+    game.cmd(RED, '-wave 1')
+    time.sleep(1)
+    maul.start_wave(game)
+    game.wait_for('the wave to spawn', lambda b: (b.get('creeps') or 0) > 0, 30)
+    time.sleep(3)
+    lua_value(game, '_G.creeps = function(f) for p = 13, 16 do local g = CreateGroup() GroupEnumUnitsOfPlayer(g, Player(p), nil) '
+                    'ForGroup(g, function() f(GetEnumUnit()) end) DestroyGroup(g) end end return true')
+    lua_value(game, 'creeps(KillUnit) return true')
+    game.wait_for('the wave to end', lambda b: not b.get('spawning') and (b.get('creeps') or 0) == 0, 60)
+    time.sleep(2)
+    for name, kind, spot, own in POWER_TOWERS:
+        findings.check(has(name, 'Attunement: |cffffcc001|r / 15'), f'after a wave the {name}\'s Power tooltip does not say Attunement 1')
+        if kind.startswith('uA'):
+            findings.check(has(name, 'Ascended for 1 wave'), f'after a wave the {name}\'s Power tooltip does not count it')
+    game.log('after a wave: ' + lua_value(game, f'return power({towers["Firelord"]})'))
+    findings.raise_if_any('the Power button')
