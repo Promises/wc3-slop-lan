@@ -941,7 +941,8 @@ def siphoned_pair(game, findings, avoid=()):
 def test_recharge_a_depleted_rock(game):
     """Elementalists: one rune siphons another, which turns to a Depleted Rock. Its Recharge is
     refused, and says so, with less than 8 gold, and with the gold it takes 8 and the rock is an
-    Uncharged Rune again."""
+    Uncharged Rune again - which sells for those 8 and no more (the rock's worth, the siphoned
+    rune's, went into the fusion)."""
     findings = Findings()
     maul.start(game)
     maul.pick(game, RED, ELEMENTALISTS)
@@ -971,6 +972,13 @@ def test_recharge_a_depleted_rock(game):
         findings.check(unit_at(game, RED, spots[1], (DEPLETED_ROCK,)) is None, 'the rock is still there')
         findings.check(maul.fresh_beat(game).gold(RED) == 100 - RECHARGE_PRICE,
                        f'the recharge did not take {RECHARGE_PRICE} gold')
+        rune = unit_at(game, RED, spots[1], (UNCHARGED_RUNE,))
+        before = maul.fresh_beat(game).gold(RED)
+        maul.sell(game, RED, [rune['id']])
+        game.wait_for('the gold to change', lambda beat: beat.gold(RED) != before, 10)
+        got = maul.fresh_beat(game).gold(RED) - before
+        game.log(f'the recharged rune sold for {got}')
+        findings.check(got == RECHARGE_PRICE, f'the recharged rune sold for {got}, its Recharge cost {RECHARGE_PRICE}')
     except TestFailed as error:
         findings.append(f'with 100 gold: {error}')
     findings.raise_if_any('Recharge')
