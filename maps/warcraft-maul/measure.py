@@ -1856,44 +1856,51 @@ def test_race_picker_tabs(game):
 # The picks with a guide in the race picker (wc3-ts-template RaceGuides.ts): their tab, and their
 # row's text, with which match of it to click (the Random tab and the Random pick share a name)
 GUIDED_PICKS = (('Random', 'Random', 2), ('Random', 'Hardcore Random', 1), ('Random', 'Hybrid Random', 1),
-                ('Beginner', 'Human Town Hall', 1), ('Advanced', 'The Elementalists', 1))
+                ('Beginner', 'Human Town Hall', 1), ('Beginner', 'Orc Stronghold [Geno]', 1),
+                ('Beginner', 'High Elf Barracks [Geno]', 1), ('Beginner', 'Outland', 1), ('Beginner', 'High Elf Farm', 1),
+                ('Beginner', 'Giants', 1), ('Beginner', 'Draenei Haven [Geno]', 1), ('Beginner', 'Corrupted Night Elves', 1),
+                ('Beginner', 'Caerbannog', 1), ('Beginner', 'Critters [Geno]', 1), ('Beginner', 'Forest Troll Hut', 1),
+                ('Advanced', 'The Elementalists', 1))
 
 
 def test_race_guides(game):
     """Screenshots of red's race picker with each pick that has a guide shown in its information
-    pane - the three random picks, Human Town Hall and the Elementalists - for looking at whether
+    pane - the three random picks, the Beginner races and the Elementalists - for looking at whether
     each guide fits the pane and is not under the scoreboard (folded while the picker is open), and
     one once the picker is closed, the scoreboard back. A tab and a row are clicked by their text
     among the panel's buttons."""
     findings = Findings()
     maul.start(game)
-    # The n-th of the panel's buttons whose text, without colour codes, is t; red's click on it.
-    # Frame texts are local, so a check reads "not red, or ...": both clients note the same line.
+    # The n-th of the panel's buttons whose text, without colour codes, is t, and a click on it. The
+    # clicks are made on both clients, each in its own picker (tabs and rows only change what that
+    # client shows), so both pickers are alike and every check notes the same line on both.
     # (One short line each: a command line is cut at chat length.)
     lua_value(game, '_G.plain = function(s) return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end return true')
     lua_value(game, '_G.kid = function(i) return BlzFrameGetChild(BlzGetFrameByName("raceSelectPanel", 0), i) end return true')
     lua_value(game, '_G.nth = function(t, n) for i = 0, BlzFrameGetChildrenCount(BlzGetFrameByName("raceSelectPanel", 0)) - 1 do '
                     'local s = BlzFrameGetText(kid(i)) if s and plain(s) == t then n = n - 1 if n == 0 then return kid(i) end end end end return true')
-    lua_value(game, '_G.clk = function(t, n) if GetLocalPlayer() ~= Player(0) then return true end local c = nth(t, n) '
-                    'if c then BlzFrameClick(c) end return c ~= nil end return true')
+    lua_value(game, '_G.clk = function(t, n) local c = nth(t, n) if c then BlzFrameClick(c) end return c ~= nil end return true')
     for tab, pick, match in GUIDED_PICKS:
         if not lua_true(game, f'return clk("{tab}", 1)'):
             findings.append(f'no {tab} tab')
             continue
         time.sleep(0.5)
         if not lua_true(game, f'return clk("{pick}", {match})'):
-            findings.append(f'no {pick} row in the {tab} tab')
-            continue
+            # Further down the list: the scrollbar to its bottom (its top is its maximum)
+            lua_true(game, 'BlzFrameSetValue(BlzGetFrameByName("raceSelectScroll", 0), 0) return true')
+            time.sleep(0.5)
+            if not lua_true(game, f'return clk("{pick}", {match})'):
+                findings.append(f'no {pick} row in the {tab} tab')
+                continue
         time.sleep(0.5)
-        findings.check(lua_true(game, 'return GetLocalPlayer() ~= Player(0) or '
-                                      f'plain(BlzFrameGetText(BlzGetFrameByName("raceSelectInfoName", 0))) == "{pick}"'),
+        findings.check(lua_true(game, f'return plain(BlzFrameGetText(BlzGetFrameByName("raceSelectInfoName", 0))) == "{pick}"'),
                        f'clicked {pick}, the pane shows another pick')
         try:
             game.log(f'{pick}: {game.screenshot(0)}')
         except TestFailed as problem:
             game.log(f'no screenshot of {pick}: {problem}')
     # The scoreboard folds while the picker is open (it covers the pane) and comes back when it closes
-    lua_true(game, 'if GetLocalPlayer() == Player(0) then BlzFrameClick(BlzGetFrameByName("raceSelectClose", 0)) end return true')
+    lua_true(game, 'BlzFrameClick(BlzGetFrameByName("raceSelectClose", 0)) return true')
     time.sleep(1)
     try:
         game.log(f'the picker closed, the scoreboard back: {game.screenshot(0)}')
