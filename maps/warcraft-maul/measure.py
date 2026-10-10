@@ -2327,3 +2327,31 @@ def test_power_button(game):
         if kind.startswith('uA'):
             findings.check(shows('AP04', 'Ascended for 1 wave'), f'after a wave the {name}\'s Power tooltip does not count it')
     findings.raise_if_any('the Power button')
+
+
+SCORPASITE, PARASITIC_BITE, BROODMOTHER = 'n00T', 'A01I', 'o01A'
+# A creep that dies of a few bites, so it spawns a Scorpasite
+WEAK_LIFE = 400
+
+
+def test_scorpasite_autocast(game):
+    """Arachnid's Parasitic Bite spawns a Scorpasite from the creep it kills, and the Scorpasite,
+    which has the bite too, casts it by itself on the creep beside it (its autocast was off): it is
+    switched on as the Scorpasite enters the map, as a tower's is when it is set up."""
+    findings = Findings()
+    maul.start(game)
+    game.watch_casts(RED)
+    spot = red_lane_spots()[5]
+    place_tower(game, BROODMOTHER, spot)
+    game.create(CREEPS, maul.GROUND_TARGET, spot[0], spot[1] + 120, life=WEAK_LIFE, rooted=True)
+    game.create(CREEPS, maul.GROUND_TARGET, spot[0] + 100, spot[1] + 120, life=TARGET_LIFE, rooted=True)
+    try:
+        game.wait('a Scorpasite to spawn', lambda: any(u['type'] == SCORPASITE for u in game.units(RED)), 30)
+    except TestFailed as error:
+        findings.append(str(error))
+        findings.raise_if_any('the Scorpasite')
+    time.sleep(8)
+    bites = [c for c in game.casts() if c.get('srctype') == SCORPASITE and c.get('ability') == PARASITIC_BITE]
+    game.log(f'Scorpasite bites: {len(bites)}')
+    findings.check(len(bites) > 0, 'the Scorpasite never cast Parasitic Bite: its autocast is off')
+    findings.raise_if_any('the Scorpasite')
