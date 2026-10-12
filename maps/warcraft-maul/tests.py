@@ -211,3 +211,99 @@ def test_vote_ends_when_everyone_voted(game):
         raise TestFailed(f'the difficulty vote ended with {line.split(" vote ")[1]}; both voted 200%')
     game.log(f'mode decided within {voted - started:.0f}s of the host leaving it to a vote, difficulty '
              f'{time.time() - voted:.0f}s after both voted')
+
+
+# Two spots in red's lane, away from its checkpoints, for towers placed with the .tower hook
+RESET_SPOTS = ((-2688, 4224), (-2688, 5248))
+
+
+def place(game, unit_type, spot):
+    """A tower put down for red as if built (the map's .tower hook); its id."""
+    before = len(game.events('tower'))
+    game.cmd(RED, f'.tower {unit_type} {spot[0]} {spot[1]}')
+    game.wait(f'the {unit_type}', lambda: any(' made ' in line for line in game.events('tower')[before:]), 10)
+    line = next(line for line in game.events('tower')[before:] if ' made ' in line)
+    return int(line.split(' id=', 1)[1].split()[0])
+
+
+def listed_towers(game, player=RED):
+    """The ids of every tower the map lists for the player, those whose unit is gone included (their
+    type reads empty, which maul.towers leaves out)."""
+    before = len(game.events('tower'))
+    game.cmd(player, '.towers')
+    game.wait('the tower list', lambda: any(line.endswith(f'p{player} end') for line in game.events('tower')[before:]), 15)
+    return [line.split(' id=', 1)[1].split()[0] for line in game.events('tower')[before:] if ' id=' in line]
+
+
+def test_repick_takes_the_towers_too(game):
+    """-repick takes the towers built before it, out of the map's own list of the player's towers too
+    (it once destroyed the units only: the towers stayed in the list, and their maze cells blocked)."""
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    for spot in RESET_SPOTS:
+        place(game, 'hC66', spot)
+    if len(maul.towers(game, RED)) != len(RESET_SPOTS):
+        raise TestFailed(f'the towers were not placed: {maul.towers(game, RED)}')
+    game.cmd(RED, '-repick')
+    game.wait('the repick to take the builder', lambda: not any(u['type'] == 'hC07' for u in game.units(RED)), 15)
+    left = listed_towers(game)
+    if left:
+        raise TestFailed(f'after -repick the map still lists {len(left)} tower(s) for red, their units gone: {left}')
+
+
+def test_resetgame(game):
+    """-resetgame (debug) puts the game back to just after the settings, mid-wave: red has picked a
+    race, placed towers and has gold to spare, and wave 5 is spawning. After it no creep is left and
+    none comes, the wave is 1, lives are back, red has the starting gold and lumber, no tower and no
+    unit but the ones a game starts with, the mode is still Debug, the race picker is open, a race
+    can be picked again, and the next wave is wave 1."""
+    findings = []
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    for spot in RESET_SPOTS:
+        place(game, 'hC66', spot)
+    game.cmd(RED, '.gold 5000')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == 5000)
+    game.cmd(RED, '-lives 50')
+    game.cmd(RED, '-wave 5')
+    time.sleep(1)
+    maul.start_wave(game)
+    game.wait_for('wave 5 to spawn', lambda b: (b.get('creeps') or 0) > 0, 30)
+    before = len(game.events('reset'))
+    game.cmd(RED, '-resetgame')
+    game.wait('the reset', lambda: len(game.events('reset')) > before, 10)
+    # Long enough for a spawning loop that went on, or a round end, to show
+    time.sleep(6)
+    beat = maul.fresh_beat(game)
+    checks = [
+        (beat.get('creeps') == 0, f'{beat.get("creeps")} creeps left'),
+        (beat.get('wave') == 1, f'the wave is {beat.get("wave")}'),
+        (beat.get('lives') == 100, f'lives are {beat.get("lives")}'),
+        (beat.get('mode') == 'debug', f'the mode is {beat.get("mode")}'),
+        (beat.gold(RED) == 100, f'red has {beat.gold(RED)} gold'),
+        (beat.lumber(RED) == 1, f'red has {beat.lumber(RED)} lumber'),
+    ]
+    findings += [problem for ok, problem in checks if not ok]
+    towers = listed_towers(game)
+    if towers:
+        findings.append(f'the map still lists {len(towers)} tower(s) for red')
+    units = [u['type'] for u in game.units(RED) if u['type'] not in KEPT_ON_REPICK]
+    if units:
+        findings.append(f'red still has units: {units}')
+    # Frames are local: "not red, or ..." gives both clients the same line when it holds
+    asked = len(game.events('lua'))
+    game.cmd(RED, '.lua return GetLocalPlayer() ~= Player(0) or BlzFrameIsVisible(BlzGetFrameByName("raceSelectPanel", 0))')
+    game.wait('the picker check', lambda: len(game.events('lua')) > asked, 10)
+    if not game.events('lua')[asked].endswith('ok true'):
+        findings.append('the race picker is not open')
+    builder = maul.pick(game, RED, ORC_STRONGHOLD)
+    if builder['type'] == 'hC07':
+        findings.append('the race picked after the reset gave the old builder')
+    waves = len(game.events('wave'))
+    maul.start_wave(game)
+    game.wait('the next wave', lambda: len(game.events('wave')) > waves, 15)
+    first = game.events('wave')[waves]
+    if ' wave 1 ' not in first:
+        findings.append(f'the next wave was not wave 1: {first}')
+    if findings:
+        raise TestFailed('-resetgame: ' + '; '.join(findings))
