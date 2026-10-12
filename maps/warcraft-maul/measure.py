@@ -9,7 +9,9 @@ hit, or could not be built.
 Raw is the damage before the target's armor, as the map's damage triggers see it; dealt is what
 the target lost. Spells (attack=false) are counted apart from attacks.
 """
+import json
 import math
+import pathlib
 import time
 
 import maul
@@ -2355,3 +2357,164 @@ def test_scorpasite_autocast(game):
     game.log(f'Scorpasite bites: {len(bites)}')
     findings.check(len(bites) > 0, 'the Scorpasite never cast Parasitic Bite: its autocast is off')
     findings.raise_if_any('the Scorpasite')
+
+
+# Ground targets in a row: the first, and others this far from it (the splash: 100 full, 150, 200)
+SPLASH_OFFSETS = (0, 80, 130, 180, 260)
+
+
+def test_cold_tower_splashes_ground(game):
+    """The Cold Tower's splash reaches ground units (its area targets were air only, so on a ground
+    wave it hit one creep): of a row of rooted ground targets, those near the one it attacks take
+    splash. Logs each target's hits and damage, by its distance from the most-hit one."""
+    findings = Findings()
+    maul.start(game)
+    game.watch(CREEPS)
+    tower = place_tower(game, COLD_TOWER, COLD_TOWER_SPOT)
+    x, y = COLD_TOWER_SPOT[0], COLD_TOWER_SPOT[1] + 400
+    targets = {offset: game.create(CREEPS, maul.GROUND_TARGET, x + offset, y, life=TARGET_LIFE, rooted=True)[0]['id']
+               for offset in SPLASH_OFFSETS}
+    hits = [f for _, f in watch_hits(game, 15) if f.get('src') == tower]
+    by_target = {offset: [f for f in hits if f.get('dst') == target] for offset, target in targets.items()}
+    for offset, got in by_target.items():
+        mean = sum(f.get('raw', 0) for f in got) / len(got) if got else 0
+        game.log(f'target at +{offset}: {len(got)} hits, {mean:.0f} a hit before armour')
+    struck = [offset for offset, got in by_target.items() if got]
+    findings.check(len(struck) > 1, f'only the targets at {struck} were hit: the splash does not reach ground')
+    findings.raise_if_any('the Cold Tower\'s splash')
+
+
+# A box of plain Towers around red's second checkpoint (-3584, 4736), its only gap in the west wall,
+# facing away from the creeps: they come from the east along its east wall - beside the checkpoint
+# as the crow flies, yet with the whole way round still to walk - and go round it to the gap. A
+# straight-line measure ranks them the wrong way round. The Cold Tower stands in the north wall.
+RING_LEFT, RING_RIGHT, RING_BOTTOM, RING_TOP = -3904, -3264, 4416, 5056
+RING_GAP = (4672, 4800)
+RING_COLD_TOWER = (-3584, RING_TOP)
+
+
+def ring_spots():
+    xs = range(RING_LEFT, RING_RIGHT + 1, 128)
+    ys = range(RING_BOTTOM, RING_TOP + 1, 128)
+    spots = {(x, RING_BOTTOM) for x in xs} | {(x, RING_TOP) for x in xs} | {(RING_RIGHT, y) for y in ys}
+    spots |= {(RING_LEFT, y) for y in ys if y not in RING_GAP}
+    return sorted(spots)
+
+
+def test_cold_tower_frontmost_round_a_ring(game):
+    """The Cold Tower ranks creeps by how far they have walked, not by the straight line to their
+    checkpoint: round a box whose only way in faces away from the creeps (ring_spots), each pick it
+    makes is held up against the creep in its range that had walked furthest (walk_tracker)."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    for player in WAVE_CREEP_PLAYERS:
+        game.watch(player)
+    game.cmd(RED, '-lives 1000000')
+    walls = ring_spots()
+    for spot in walls:
+        if spot != RING_COLD_TOWER:
+            place_tower(game, MAZE_WALL, spot)
+    tower = place_tower(game, COLD_TOWER, RING_COLD_TOWER)
+    lua_value(game, f'BlzSetUnitBaseDamage(unit({tower}), 10, 0) return true')
+    walk_tracker(game, tower)
+    game.cmd(RED, '-wave 2')
+    time.sleep(1)
+    since_target, since_walk = len(game.events('target')), len(game.events('walk'))
+    maul.start_wave(game)
+    time.sleep(110)
+    judged, wrong = walked_judgement(game, tower, since_target, since_walk)
+    game.log(f'{judged} picks judged, {len(wrong)} not the creep that had walked furthest')
+    for picked, walked in wrong[:6]:
+        game.log(f'  picked {picked}; walked: {walked}')
+    findings.check(judged >= 5, f'only {judged} picks to judge')
+    findings.check(not wrong, f'{len(wrong)} of {judged} picks were not the creep that had walked furthest')
+    findings.raise_if_any('the Cold Tower round a ring')
+
+
+CRITTERS_MAZE = pathlib.Path(__file__).resolve().parent / 'builds' / 'critters-human-frost.maul-build.json'
+# Walked as far as the furthest, within this (creeps walking abreast)
+WALK_TOLERANCE = 96
+
+
+def walk_tracker(game, tower):
+    """Lua in the game that adds up how far every wave creep has walked (ten times a second, jumps
+    over 60 left out, so a teleport adds nothing), and at each of the tower's attacks notes the creep
+    in its range, furthest first: 'walk <ref>:<walked> ...' lines (six), in the tick of the attack,
+    beside the tower's own 'target ... front' pick. One short line each: a line is cut at chat length."""
+    lua_value(game, '_G.wk, _G.lp = {}, {} return true')
+    lua_value(game, '_G.step = function(u) local x, y = GetUnitX(u), GetUnitY(u) local p = lp[u] if p then '
+                    'local d = math.sqrt((x - p[1])^2 + (y - p[2])^2) if d < 60 then wk[u] = (wk[u] or 0) + d end end lp[u] = {x, y} end return true')
+    lua_value(game, '_G.creeps = function(f) for p = 13, 16 do local g = CreateGroup() GroupEnumUnitsOfPlayer(g, Player(p), nil) '
+                    'ForGroup(g, function() f(GetEnumUnit()) end) DestroyGroup(g) end end return true')
+    lua_value(game, 'TimerStart(CreateTimer(), 0.1, true, function() creeps(function(u) if UnitAlive(u) then step(u) end end) end) return true')
+    lua_value(game, f'_G.CT = unit({tower}) _G.ranked = function() local r = {{}} creeps(function(u) '
+                    'if UnitAlive(u) and IsUnitInRange(u, CT, 675) then r[#r + 1] = u end end) return r end return true')
+    lua_value(game, '_G.walkline = function() local r = ranked() table.sort(r, function(a, b) return (wk[a] or 0) > (wk[b] or 0) end) '
+                    'local s = {} for i = 1, math.min(#r, 6) do s[i] = Slop.ref(r[i]) .. ":" .. math.floor(wk[r[i]] or 0) end return s end return true')
+    lua_value(game, '_G.wt = CreateTrigger() for p = 13, 16 do TriggerRegisterPlayerUnitEvent(wt, Player(p), EVENT_PLAYER_UNIT_ATTACKED, nil) end return true')
+    lua_value(game, 'TriggerAddAction(wt, function() if GetAttacker() ~= CT then return end local s = walkline() '
+                    'if #s > 0 then Slop.note("walk", table.concat(s, " ")) end end) return true')
+
+
+def walked_judgement(game, tower, since_target, since_walk):
+    """Each of the tower's picks against the creeps in its range at that attack, by how far they
+    had walked: (judged, [(picked, {ref: walked} of the furthest six)] wrong). A pick is right when
+    it had walked as far as the furthest, give or take WALK_TOLERANCE."""
+    walks = {}
+    for line in game.events('walk')[since_walk:]:
+        walks[tick_of(line)] = {int(ref): int(w) for ref, w in (e.split(':') for e in line.split(' walk ', 1)[1].split())}
+    judged, wrong = 0, []
+    marker = f' target {tower} front '
+    for line in game.events('target')[since_target:]:
+        if marker not in line or tick_of(line) not in walks:
+            continue
+        picked = int(line.split(marker, 1)[1].split()[0])
+        walked = walks[tick_of(line)]
+        judged += 1
+        if walked.get(picked, -1) < max(walked.values()) - WALK_TOLERANCE:
+            wrong.append((picked, walked))
+    return judged, wrong
+
+
+def test_cold_tower_frontmost_in_the_critters_maze(game):
+    """The Cold Tower attacks the creep that has walked furthest, in a player's maze: the Critters
+    and Humans design (builds/critters-human-frost), its one Human tower made a Cold Tower, a wave
+    walking it. The game adds up how far each creep has walked (walk_tracker); each pick the tower
+    makes is held up against the creep in its range that had walked furthest at that attack."""
+    import builds
+    findings = Findings()
+    design = json.loads(CRITTERS_MAZE.read_text())
+    for tower in design['towers']:
+        if tower.get('chain', [None])[-1] == 'h048':
+            tower['chain'] = [COLD_TOWER]
+    difficulty, builds.DIFFICULTY = builds.DIFFICULTY, 100
+    try:
+        placed = builds.build_design(game, design, findings)
+    finally:
+        builds.DIFFICULTY = difficulty
+    findings.raise_if_any('building the maze')
+    tower = next(unit['id'] for spec, spot, unit in placed if unit and spec['chain'][-1] == COLD_TOWER)
+    for player in WAVE_CREEP_PLAYERS:
+        game.watch(player)
+    game.cmd(RED, '-lives 1000000')
+    lua_value(game, f'BlzSetUnitBaseDamage(unit({tower}), 10, 0) return true')
+    walk_tracker(game, tower)
+    game.cmd(RED, '-wave 2')
+    time.sleep(1)
+    since_target, since_walk = len(game.events('target')), len(game.events('walk'))
+    maul.start_wave(game)
+    for second in range(120):
+        time.sleep(1)
+        if second == 45:
+            try:
+                game.log(f'the maze at 45 s: {game.screenshot(0)}')
+            except TestFailed as problem:
+                game.log(f'no screenshot: {problem}')
+    judged, wrong = walked_judgement(game, tower, since_target, since_walk)
+    game.log(f'{judged} picks judged, {len(wrong)} not the creep that had walked furthest')
+    for picked, walked in wrong[:6]:
+        game.log(f'  picked {picked}; walked: {walked}')
+    findings.check(judged >= 8, f'only {judged} picks to judge')
+    findings.check(not wrong, f'{len(wrong)} of {judged} picks were not the creep that had walked furthest')
+    findings.raise_if_any('the Cold Tower in the Critters maze')
