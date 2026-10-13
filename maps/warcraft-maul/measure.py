@@ -2727,3 +2727,56 @@ def test_anti_juggle_lifts_when_safe(game):
     except TestFailed as error:
         findings.append(f'first leg: {error}')
     findings.raise_if_any('anti-juggle lifting')
+
+
+# A wall the whole height of red's first leg; the hybrid tower that would close its gap, and one that blocks nothing
+HYBRID_WALL_X, HYBRID_GAP_Y = -2304, 4672
+HYBRID_FREE_SPOT = (-3008, 4672)
+
+
+def hybrid_corner(spot):
+    """The build message's corner cell, in red's maze, of the footprint centred on a spot."""
+    return (spot[0] - 64 - RED_AREA[0]) // maul.GRID, (spot[1] - 64 - RED_AREA[1]) // maul.GRID
+
+
+def test_hybrid_tower_cannot_block(game):
+    """A hybrid builder's towers go through anti-block like any other: with red's first leg walled
+    off but for one row, the hybrid tower built in that row (placed as red's own click sends it) is
+    cancelled and costs nothing, and the lane stays open. The checks used to run after the
+    builder's dummy had been replaced by the real tower, by when it was gone, so a hybrid tower
+    could close the lane. A hybrid tower that blocks nothing is built and paid for."""
+    findings = Findings()
+    maul.start(game)
+    game.cmd(RED, '.gold 5000')
+    game.wait_for('the gold to be set', lambda beat: beat.gold(RED) == 5000)
+    before = len(game.events('hybrid'))
+    maul.sync(game, RED, f'race-pick:{HYBRID_RANDOM}')
+    game.wait('Hybrid Random to hand out towers', lambda: any(' hybrid p0 ' in line for line in game.events('hybrid')[before:]), 20)
+    game.wait('the hybrid builder', lambda: any(u['type'] == HYBRID_BUILDER for u in game.units(RED)), 15)
+    for y in MAZE_ROWS:
+        if y != HYBRID_GAP_Y:
+            place_tower(game, MAZE_WALL, (HYBRID_WALL_X, y))
+
+    def tower_at(spot):
+        return [u for u in game.units(RED) if abs(u['x'] - spot[0]) < 32 and abs(u['y'] - spot[1]) < 32]
+
+    def gold():
+        return int(lua_value(game, 'return GetPlayerState(Player(0), PLAYER_STATE_RESOURCE_GOLD)'))
+
+    def hybrid_build(spot):
+        before = gold()
+        corner = hybrid_corner(spot)
+        maul.sync(game, RED, f'build:0:{corner[0]}:{corner[1]}:0:0')
+        time.sleep(4)
+        return before - gold()
+
+    paid = hybrid_build((HYBRID_WALL_X, HYBRID_GAP_Y))
+    standing = tower_at((HYBRID_WALL_X, HYBRID_GAP_Y))
+    game.log(f'in the gap: {len(standing)} towers standing, {paid} gold paid')
+    findings.check(not standing, f'the hybrid tower closing the lane was built: {standing}')
+    findings.check(paid == 0, f'the cancelled hybrid tower cost {paid} gold')
+    paid = hybrid_build(HYBRID_FREE_SPOT)
+    standing = tower_at(HYBRID_FREE_SPOT)
+    game.log(f'free spot: {len(standing)} towers standing, {paid} gold paid')
+    findings.check(len(standing) == 1 and paid > 0, f'the hybrid tower that blocks nothing: {len(standing)} standing, {paid} gold paid')
+    findings.raise_if_any('hybrid anti-block')
