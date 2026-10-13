@@ -2847,13 +2847,16 @@ ANCIENT_GOLEM = 'o00X'
 def test_ancient_golem_grows_to_its_size(game):
     """The Giants' Ancient Golem grows every minute for seven (Growing Moss: +75 damage each), from
     30% of its model when built to its full size. SetUnitScale takes a multiple of the size, and the
-    percentages went in as they were, so it grew to 100 times its size."""
+    percentages went in as they were, so it grew to 100 times its size. The sizes are the ones the
+    map notes as it sets them: the real game's scale field (UNIT_RF_SCALING_VALUE) keeps the unit
+    type's 0.3 whatever SetUnitScale does (wc3-sim's follows it)."""
     findings = Findings()
     maul.start(game)
     golem = place_tower(game, ANCIENT_GOLEM, red_lane_spots()[5])
 
     def size():
-        return float(lua_value(game, f'return BlzGetUnitRealField(unit({golem}), UNIT_RF_SCALING_VALUE)'))
+        notes = [trace.parse_fields(line) for line in game.events('golem') if f' {golem} ' in line + ' ']
+        return float(notes[-1]['scale']) if notes else -1.0
 
     def damage():
         return int(lua_value(game, f'return BlzGetUnitBaseDamage(unit({golem}), 0)'))
