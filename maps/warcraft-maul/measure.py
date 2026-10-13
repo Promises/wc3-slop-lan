@@ -2518,3 +2518,22 @@ def test_cold_tower_frontmost_in_the_critters_maze(game):
     findings.check(judged >= 8, f'only {judged} picks to judge')
     findings.check(not wrong, f'{len(wrong)} of {judged} picks were not the creep that had walked furthest')
     findings.raise_if_any('the Cold Tower in the Critters maze')
+
+
+# Elementalist towers that had no sell ability (A02D): Decay Level 2, Moss, the Sapling
+NEWLY_SELLABLE = (('Decay Level 2', 'u03A'), ('Moss', 'u023'), ('Sapling', 'u021'))
+
+
+def test_elementalist_towers_sell(game):
+    """Decay Level 2, Moss and the Sapling can be sold (they had no sell ability): each, set down in
+    red's lane, goes when red casts sell on it. (The Depleted Rock still cannot be.)"""
+    findings = Findings()
+    maul.start(game)
+    spots = red_lane_spots()
+    for index, (name, kind) in enumerate(NEWLY_SELLABLE):
+        tower = place_tower(game, kind, spots[5 + 6 * index])
+        try:
+            maul.sell(game, RED, [tower], timeout=10)
+        except TestFailed as error:
+            findings.append(f'{name}: {error}')
+    findings.raise_if_any('selling Elementalist towers')

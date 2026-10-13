@@ -986,7 +986,8 @@ def test_recharge_a_depleted_rock(game):
 
 # What an Uncharged Rune costs: all a fusion of two runes was paid
 RUNE_PRICE = 8
-# The first fusions that cannot be sold (no sell ability): Moss and the Sapling; nor can the rock
+# First fusions this test leaves out: Moss and the Sapling, which had no sell ability (they have one
+# now, test_elementalist_towers_sell in measure.py) and which grow by themselves (the rock cannot be sold)
 UNSELLABLE_PAIRS = (('Nature', 'Water'), ('Life', 'Nature'))
 
 
