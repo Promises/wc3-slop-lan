@@ -2837,3 +2837,33 @@ def test_sample_maze_button_cycles(game):
     game.log(f'four clicks showed {shown}')
     findings.check(shown == [1, 2, 3, 0], f'four clicks showed {shown}, not mazes 1, 2, 3 and then none')
     findings.raise_if_any('the sample maze button')
+
+
+ANCIENT_GOLEM = 'o00X'
+
+
+def test_ancient_golem_grows_to_its_size(game):
+    """The Giants' Ancient Golem grows every minute for seven (Growing Moss: +75 damage each), from
+    30% of its model when built to its full size. SetUnitScale takes a multiple of the size, and the
+    percentages went in as they were, so it grew to 100 times its size."""
+    findings = Findings()
+    maul.start(game)
+    golem = place_tower(game, ANCIENT_GOLEM, red_lane_spots()[5])
+
+    def size():
+        return float(lua_value(game, f'return BlzGetUnitRealField(unit({golem}), UNIT_RF_SCALING_VALUE)'))
+
+    def damage():
+        return int(lua_value(game, f'return BlzGetUnitBaseDamage(unit({golem}), 0)'))
+
+    sizes, first_damage = [size()], damage()
+    for _ in range(7):
+        time.sleep(61)
+        sizes.append(size())
+    gained = damage() - first_damage
+    game.log(f'sizes {[round(s, 2) for s in sizes]}, damage +{gained}')
+    expected = [0.3 + 0.1 * minute for minute in range(8)]
+    findings.check(all(abs(s - e) < 0.01 for s, e in zip(sizes, expected)),
+                   f'sizes {[round(s, 2) for s in sizes]}, not 0.3 growing by 0.1 a minute to 1.0')
+    findings.check(gained == 7 * 75, f'seven minutes added {gained} damage, not 525')
+    findings.raise_if_any('the Ancient Golem')
