@@ -2819,3 +2819,21 @@ def test_game_over_pays_no_level(game):
     game.log(f'gold before the leak {before}, after GAME OVER {after}')
     findings.check(after == before, f'the lost game paid {after - before} gold')
     findings.raise_if_any('game over')
+
+
+def test_sample_maze_button_cycles(game):
+    """The action bar's sample maze button shows the three sample mazes in turn (-maze 1, 2 and 3:
+    the circle, the basic and the advanced one), one each click, and hides it on the fourth. The
+    button is clicked in red's own UI; the map notes what each click shows."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    shown = []
+    for _ in range(4):
+        before = len(game.events('maze'))
+        lua_true(game, 'if GetLocalPlayer() == Player(0) then BlzFrameClick(BlzGetFrameByName("mazeButton0", 0)) end return true')
+        game.wait('the click to show its maze', lambda: len(game.events('maze')) > before, 10)
+        shown.append(trace.parse_fields(game.events('maze')[before])['shows'])
+    game.log(f'four clicks showed {shown}')
+    findings.check(shown == [1, 2, 3, 0], f'four clicks showed {shown}, not mazes 1, 2, 3 and then none')
+    findings.raise_if_any('the sample maze button')
