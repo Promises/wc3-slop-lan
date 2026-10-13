@@ -2537,3 +2537,193 @@ def test_elementalist_towers_sell(game):
         except TestFailed as error:
             findings.append(f'{name}: {error}')
     findings.raise_if_any('selling Elementalist towers')
+
+
+HUMAN_BUILDER, PLAIN_TOWER = 'hC07', 'hC66'
+# Red's lane, its two checkpoints (the wave walks spawn, the first, then west to the second)
+RED_AREA = (-4224, 3968, -1792, 5504)
+# A creep that moved less than this in two seconds is standing still
+STILL = 32
+
+
+def grid_corner(x, y):
+    """The nearest grid corner of red's lane, where a tower's centre goes."""
+    return (RED_AREA[0] + 64 * round((x - RED_AREA[0]) / 64), RED_AREA[1] + 64 * round((y - RED_AREA[1]) / 64))
+
+
+def test_creeps_go_on_when_built_ahead(game):
+    """Creeps keep walking when towers go down just ahead of them (seen in games: creeps that stopped
+    going on properly after a tower was built in front of them or changed their way): a ground wave
+    walks red's lane while, every 1.2 seconds, a tower is built about 200 ahead of the creep in front,
+    half across its way - beyond anti-juggle's reach, and never blocking; four waves. The game notes every
+    creep in the lane that moved less than 32 in two seconds; none may stand still twice running."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    game.cmd(RED, '.gold 100000')
+    game.cmd(RED, '-lives 1000000')
+    lua_value(game, '_G.creeps = function(f) for p = 13, 16 do local g = CreateGroup() GroupEnumUnitsOfPlayer(g, Player(p), nil) '
+                    'ForGroup(g, function() f(GetEnumUnit()) end) DestroyGroup(g) end end return true')
+    lua_value(game, f'_G.inred = function(u) local x, y = GetUnitX(u), GetUnitY(u) return x > {RED_AREA[0]} and x < {RED_AREA[2]} '
+                    f'and y > {RED_AREA[1]} and y < {RED_AREA[3]} end return true')
+    lua_value(game, f'_G.lp = {{}} _G.still = function(u) local x, y = GetUnitX(u), GetUnitY(u) local p = lp[u] lp[u] = {{x, y}} '
+                    f'return p ~= nil and (x - p[1])^2 + (y - p[2])^2 < {STILL * STILL} end return true')
+    lua_value(game, '_G.ordr = function(u) return OrderId2String(GetUnitCurrentOrder(u)) or tostring(GetUnitCurrentOrder(u)) end return true')
+    lua_value(game, '_G.notestill = function(u) Slop.note("still", Slop.ref(u) .. " at=" .. math.floor(GetUnitX(u)) .. "," '
+                    '.. math.floor(GetUnitY(u)) .. " order=" .. ordr(u)) end return true')
+    lua_value(game, 'TimerStart(CreateTimer(), 2, true, function() creeps(function(u) if UnitAlive(u) and inred(u) and still(u) then '
+                    'notestill(u) end end) end) return true')
+    game.cmd(RED, '-wave 2')
+    time.sleep(1)
+    since_still, since_repath = len(game.events('still')), len(game.events('repath'))
+    built, refused, side = 0, 0, 1
+    # A wave crosses the lane in about ten seconds: four waves, a tower every 1.2 seconds while one walks
+    for _ in range(4):
+        maul.start_wave(game)
+        game.wait_for('the wave to spawn', lambda b: (b.get('creeps') or 0) > 0, 30)
+        for _ in range(12):
+            time.sleep(1.2)
+            in_red = [p for p in creep_positions(game).values()
+                      if RED_AREA[0] < p[0] < RED_AREA[2] and RED_AREA[1] < p[1] < RED_AREA[3]]
+            if not in_red:
+                continue
+            # The creep in front: on the leg to the second checkpoint the westmost, before it the nearest the first
+            on_leg = [p for p in in_red if p[0] < MAZE_CHECKPOINTS[0][0]]
+            lead = min(on_leg) if on_leg else min(in_red, key=lambda p: math.dist(p, MAZE_CHECKPOINTS[0]))
+            ahead = (lead[0] - 200, lead[1] + side * 96) if on_leg else \
+                ((lead[0] + MAZE_CHECKPOINTS[0][0]) / 2, (lead[1] + MAZE_CHECKPOINTS[0][1]) / 2 + side * 96)
+            # Inside the lane, a tower's half-width from its edge
+            ahead = (min(max(ahead[0], RED_AREA[0] + 128), RED_AREA[2] - 128), min(max(ahead[1], RED_AREA[1] + 128), RED_AREA[3] - 128))
+            spot = grid_corner(*ahead)
+            side = -side
+            before = len(game.events('order'))
+            builder = game.create(RED, HUMAN_BUILDER, *spot)[0]['id']
+            game.build(RED, builder, PLAIN_TOWER, *spot)
+            try:
+                game.wait('the build order', lambda: any(' build ' in line for line in game.events('order')[before:]), 10)
+                issued = any(' build ' in line and line.endswith('issued') for line in game.events('order')[before:])
+            except TestFailed:
+                issued = False
+            built += issued
+            refused += not issued
+        game.wait_for('the wave to end', lambda b: (b.get('creeps') or 0) == 0 and not b.get('spawning'), 60)
+    time.sleep(6)
+    stills = [trace.parse_fields(line) | {'ref': line.split(' still ', 1)[1].split()[0]} for line in game.events('still')[since_still:]]
+    by_creep = {}
+    for note in stills:
+        by_creep.setdefault(note['ref'], []).append(note)
+    stuck = {ref: notes for ref, notes in by_creep.items() if len(notes) >= 2}
+    repaths = len(game.events('repath')) - since_repath
+    game.log(f'{built} towers ordered ahead of the wave ({refused} refused), {repaths} lane repaths, '
+             f'{len(stills)} still notes, {len(stuck)} creeps that stood still 4 s or more')
+    for ref, notes in list(stuck.items())[:6]:
+        game.log(f'  creep {ref}: {len(notes)} times still, at {notes[0].get("at")} .. {notes[-1].get("at")}, order {notes[-1].get("order")}')
+    findings.check(built >= 6, f'only {built} towers went down ahead of the wave')
+    findings.check(not stuck, f'{len(stuck)} creeps stood still for 4 seconds or more')
+    findings.raise_if_any('creeps going on when built ahead')
+
+
+# A wall across red's first leg (spawn, x -1792..-1472, to the first checkpoint at -2432), its gap at the top,
+# next to the checkpoint so the wave spends a while behind it
+FIRST_LEG_WALL = [(-2304, y) for y in MAZE_ROWS[:-2]]
+# A wall by the spawn, its gap at the bottom: the wave crosses the whole lane between the two, behind the first
+SPAWN_WALL = [(-1920, y) for y in MAZE_ROWS[2:]]
+# The towers sold during the wave: one in the four-pass maze on the second leg, one in the middle of the first leg's wall
+SECOND_LEG_SOLD = (-3008, 4672)
+# The wave's speed in this test: the slowest the map allows (MinUnitSpeed)
+CREEP_SPEED = 125
+FIRST_LEG_SOLD = (-2304, 4672)
+
+
+def lifted(game, spot, since):
+    marker = f' lifted at={spot[0]},{spot[1]} '
+    return [line for line in game.events('antijuggle')[since:] if marker in line]
+
+
+def test_anti_juggle_lifts_when_safe(game):
+    """An anti-juggle blocker (left by a tower sold during a wave) is lifted as soon as it guards
+    nothing - not only at the end of the round, which in continuous spawning comes late. In red's
+    lane, with the four-pass maze on the second leg and two walls across the first (by the spawn, its
+    gap at the bottom, and by the checkpoint, its gap at the top),
+    two towers are sold as a slowed wave starts, every creep still on its way to the first checkpoint:
+    one in the second leg's maze - its blocker is lifted within two seconds - and one in the middle
+    of the first leg's wall, whose gap would shorten their way - its blocker stays while the opening
+    would shorten any creep's way to the first checkpoint (judged here on its own, from the creeps'
+    places and the walls), and is lifted once it would shorten none."""
+    findings = Findings()
+    maul.start(game)
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+    game.cmd(RED, '-lives 1000000')
+    towers = {}
+    for spot in maze_spots() + FIRST_LEG_WALL + SPAWN_WALL:
+        towers[spot] = place_tower(game, MAZE_WALL, spot)
+    # The creeps slowed, so the first leg takes them a while; legs() counts red's creeps before the
+    # first checkpoint (its spawn included) and past it, in one call
+    lua_value(game, '_G.creeps = function(f) for p = 13, 16 do local g = CreateGroup() GroupEnumUnitsOfPlayer(g, Player(p), nil) '
+                    'ForGroup(g, function() f(GetEnumUnit()) end) DestroyGroup(g) end end return true')
+    lua_value(game, f'TimerStart(CreateTimer(), 0.25, true, function() creeps(function(u) SetUnitMoveSpeed(u, {CREEP_SPEED}) end) end) return true')
+    lua_value(game, f'_G.ofred = function(u) local x, y = GetUnitX(u), GetUnitY(u) return UnitAlive(u) and y > {RED_AREA[1]} '
+                    f'and y < {RED_AREA[3]} and x > {RED_AREA[0]} and x < -1400 end return true')
+    lua_value(game, f'_G.legs = function() local a, b = 0, 0 creeps(function(u) if ofred(u) then '
+                    f'if GetUnitX(u) > {MAZE_CHECKPOINTS[0][0] + 32} then a = a + 1 else b = b + 1 end end end) return a .. " " .. b end return true')
+
+    lua_value(game, f'_G.firsts = function() local t = {{}} creeps(function(u) if ofred(u) and GetUnitX(u) > {MAZE_CHECKPOINTS[0][0] + 32} '
+                    f'then t[#t + 1] = math.floor(GetUnitX(u)) .. "," .. math.floor(GetUnitY(u)) end end) return table.concat(t, " ") end return true')
+
+    def legs():
+        first, past = (int(n) for n in lua_value(game, 'return legs()').split())
+        return first, past
+
+    # The way to the first checkpoint with the sold wall tower's blocker standing and with it lifted; a
+    # creep in the spawn, east of the lane's area, is judged at the area's edge, which it walks through
+    standing = [spot for spot in maze_spots() + FIRST_LEG_WALL + SPAWN_WALL if spot != SECOND_LEG_SOLD]
+    with_blocker, cell = path_distances(standing, RED_AREA, MAZE_CHECKPOINTS[0])
+    without_blocker, _ = path_distances([spot for spot in standing if spot != FIRST_LEG_SOLD], RED_AREA, MAZE_CHECKPOINTS[0])
+
+    def shortened():
+        """How many of the creeps on the first leg the opening would give a shorter way (by a cell, at least)."""
+        places = [tuple(int(v) for v in place.split(',')) for place in lua_value(game, 'return firsts()').split()]
+        count = 0
+        for x, y in places:
+            c = cell(min(x, RED_AREA[2] - 1), y)
+            if c in with_blocker and c in without_blocker and with_blocker[c] - without_blocker[c] >= maul.GRID:
+                count += 1
+        return count
+
+    game.cmd(RED, '-wave 2')
+    time.sleep(1)
+    since = len(game.events('antijuggle'))
+    maul.start_wave(game)
+    game.wait_for('the wave to spawn', lambda b: (b.get('creeps') or 0) > 0, 30)
+    spawned_at = time.time()
+    game.order(RED, towers[SECOND_LEG_SOLD], 'windwalk')
+    game.order(RED, towers[FIRST_LEG_SOLD], 'windwalk')
+    game.wait('both towers to be sold', lambda: not {towers[SECOND_LEG_SOLD], towers[FIRST_LEG_SOLD]} & {u['id'] for u in game.units(RED)}, 10)
+    sold_at = time.time()
+    first, past = legs()
+    game.log(f'sold {sold_at - spawned_at:.1f} s after the spawn, {first} creeps on the first leg, {past} past it')
+    findings.check(first > 0 and past == 0, f'when the towers were sold, {first} creeps were on the first leg and {past} past it')
+    try:
+        game.wait('the second leg\'s blocker to be lifted', lambda: lifted(game, SECOND_LEG_SOLD, since), 3)
+        game.log(f'second leg: lifted within {time.time() - sold_at:.1f} s of the sale')
+    except TestFailed as error:
+        findings.append(f'second leg: {error}')
+    held = 0
+    while not lifted(game, FIRST_LEG_SOLD, since):
+        count = shortened()
+        # The lifting is checked again after the count: a blocker lifted before it guarded nothing more
+        if lifted(game, FIRST_LEG_SOLD, since):
+            if count:
+                findings.append(f'first leg: the blocker was lifted while it would have shortened {count} creeps\' way')
+            break
+        if count == 0:
+            break
+        held += 1
+        time.sleep(0.5)
+    game.log(f'first leg: the blocker held through {held} checks while it would have shortened creeps\' way')
+    findings.check(held >= 4, f'the opening shortened no creep\'s way for long enough to judge ({held} checks)')
+    try:
+        game.wait('the first leg\'s blocker to be lifted once they passed', lambda: lifted(game, FIRST_LEG_SOLD, since), 5)
+    except TestFailed as error:
+        findings.append(f'first leg: {error}')
+    findings.raise_if_any('anti-juggle lifting')
