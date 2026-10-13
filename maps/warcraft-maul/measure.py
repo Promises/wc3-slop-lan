@@ -2780,3 +2780,42 @@ def test_hybrid_tower_cannot_block(game):
     game.log(f'free spot: {len(standing)} towers standing, {paid} gold paid')
     findings.check(len(standing) == 1 and paid > 0, f'the hybrid tower that blocks nothing: {len(standing)} standing, {paid} gold paid')
     findings.raise_if_any('hybrid anti-block')
+
+
+def test_game_over_pays_no_level(game):
+    """A lost game pays for no level: GAME OVER removes every creep, so all four creep players'
+    food reaches 0 at once, and each is a round-end event. The classic round paid the level's
+    gold before it marked the wave over (and the simulator ran all four: levels 2-5 paid out in
+    one instant). In a classic game red builds nothing, so its gold only changes by a level's pay:
+    wave 1 leaks with lives to spare and pays its level (the control), then with one life left
+    wave 2 leaks and loses the game, which pays nothing."""
+    findings = Findings()
+    maul.start(game, mode='classic')
+    maul.pick(game, RED, HUMAN_TOWN_HALL)
+
+    def gold():
+        return int(lua_value(game, 'return GetPlayerState(Player(0), PLAYER_STATE_RESOURCE_GOLD)'))
+
+    def wave():
+        return game.beat().get('wave')
+
+    game.cmd(RED, '-lives 1000')
+    first = wave()
+    before = gold()
+    game.cmd(RED, '-start')
+    game.wait_for('wave 1 to end', lambda beat: beat.get('wave') != first, 120)
+    time.sleep(2)
+    paid = gold() - before
+    game.log(f'wave {first} ended with lives to spare: paid {paid}')
+    findings.check(paid > 0, f'a wave that ended paid {paid} gold for its level')
+
+    game.cmd(RED, '-lives 1')
+    game.cmd(RED, '-start')
+    game.wait_for('the wave to spawn', lambda beat: (beat.get('creeps') or 0) > 0, 60)
+    before = gold()
+    game.wait_for('the game to be lost', lambda beat: (beat.get('lives') if beat.get('lives') is not None else 1) <= 0, 120)
+    time.sleep(3)
+    after = gold()
+    game.log(f'gold before the leak {before}, after GAME OVER {after}')
+    findings.check(after == before, f'the lost game paid {after - before} gold')
+    findings.raise_if_any('game over')

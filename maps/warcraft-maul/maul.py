@@ -136,9 +136,14 @@ def sync(game, player, message):
     game.cmd(player, '@' + message)
 
 
-def start(game, difficulty=100, attempts=12):
+# The settings command's word for each mode, by the name the heartbeat gives it
+MODE_WORDS = {'debug': 'debug', 'classic': 'normal', 'blitz': 'blitz'}
+
+
+def start(game, difficulty=100, attempts=12, mode='debug'):
     """Debug mode (no wave progression) at that difficulty (100-400), set with the map's settings
-    command as a host bot would, so nothing but the test itself happens in the lanes.
+    command as a host bot would, so nothing but the test itself happens in the lanes. Another
+    mode ('classic', 'blitz') for a test of the mode itself.
 
     The map takes the settings only from the host it detected, and only once it waits for them,
     which is a few seconds into the game - a command before that is dropped. So it is sent until
@@ -150,13 +155,13 @@ def start(game, difficulty=100, attempts=12):
         raise TestFailed('the map is not a dev build, so it has no debug commands: run with --build '
                          '(npm run build:dev)')
     for _ in range(attempts):
-        if beat.get('mode') == 'debug':
+        if beat.get('mode') == mode:
             return
         if beat.get('mode') not in (None, 'none'):
             raise TestFailed(f'the game is already in {beat.get("mode")} mode: the settings came too late')
-        game.cmd(RED, f'-s debug {difficulty}')
+        game.cmd(RED, f'-s {MODE_WORDS[mode]} {difficulty}')
         try:
-            game.wait('the settings to apply', lambda: fresh_beat(game).get('mode') == 'debug', 5)
+            game.wait('the settings to apply', lambda: fresh_beat(game).get('mode') == mode, 5)
             return
         except TestFailed:
             beat = fresh_beat(game)
