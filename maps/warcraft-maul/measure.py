@@ -1558,7 +1558,9 @@ def test_venom_target_leaves_range(game):
         game.cmd(RED, f'.lua SetUnitPosition(unit({gone}), {x + 3000}, {y})')
         try:
             game.wait(f'an attack on a target still in range after {gone} left',
-                      lambda: any(f.get('dst') not in (gone, None) for f in attacks_since(hits)), 6)
+                      # 6 s for the attack, and 5 more for its hit line: the library writes those on its
+                      # 5 s timer when no command comes in between (this wait sends none)
+                      lambda: any(f.get('dst') not in (gone, None) for f in attacks_since(hits)), 11)
         except TestFailed as error:
             findings.append(f'round {round_ + 1}: {error}')
         game.log(f'round {round_ + 1}: moved {gone}, the creep of its latest order, away')
