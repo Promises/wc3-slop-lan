@@ -185,9 +185,14 @@ def build_step(game, race, player, chain, step, spot, tower, findings, state):
             return None
         tower = found['id']
 
+        def upgrade_done():
+            # A structure reads as its new type from the upgrade's start: an upgrade is done when the
+            # map notes it (EVENT_PLAYER_UNIT_UPGRADE_FINISH)
+            return step == 0 or any(f' {tower} type={unit_type}' in line for line in game.events('upgraded'))
+
         def finished():
             now = yield from wait(game.inspect_later(tower))
-            return now.get('life', 0) >= now.get('max_life', 1)
+            return now.get('life', 0) >= now.get('max_life', 1) and upgrade_done()
 
         if not (yield from poll(finished, 60)):
             state.pop(('beat', player), None)

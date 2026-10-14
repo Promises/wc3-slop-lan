@@ -156,8 +156,12 @@ def build_designs(game, jobs, findings):
                 game.upgrade(job.player, unit['id'], tower['chain'][step])
 
         def upgraded():
+            # Done when the map notes the upgrade finished: a structure reads as its new type from the
+            # upgrade's start, and the next form's order is refused until then
             look()
+            notes = game.events('upgraded')
             return all((unit := job.at(units[job.player], spot)) and unit['type'] == tower['chain'][step]
+                       and any(f" {unit['id']} type={tower['chain'][step]}" in line for line in notes)
                        for job, tower, spot in todo)
         try:
             game.wait(f'{len(todo)} towers to upgrade to their form {step + 1}', upgraded, UPGRADE_SECONDS)
