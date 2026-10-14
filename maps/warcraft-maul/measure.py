@@ -1574,8 +1574,14 @@ LOOT_BOX_TIER_9 = 'u04C'
 ITEM_MANA = {STICK: 1, COIN: 2, KOINZ: 6}
 
 
+# The longest chat line the real game sends: a longer .lua line never arrives (wc3-sim takes any length)
+LUA_LINE_LIMIT = 245
+
+
 def lua_value(game, code):
     """What a line of Lua returned, as text ('ok <value>' stripped)."""
+    if len('.lua ' + code) > LUA_LINE_LIMIT:
+        raise TestFailed(f'a .lua line of {len(".lua " + code)} characters, over the {LUA_LINE_LIMIT} the real game sends: {code[:60]}...')
     before = len(game.events('lua'))
     game.cmd(RED, '.lua ' + code)
     game.wait('the Lua line', lambda: len(game.events('lua')) > before, 10)
@@ -2889,9 +2895,10 @@ def test_probe_berserk_in_the_attacked_event(game):
     lua_value(game, 'SetPlayerTechResearched(Player(0), FourCC("Robk"), 1) _G.B = {} return true')
     lua_value(game, '_G.mk = function(dx) local t = CreateUnit(Player(0), FourCC("hgtw"), ' + str(x) + ' + dx, ' + str(y)
               + ', 0) UnitAddAbility(t, FourCC("Absk")) BlzSetUnitAbilityCooldown(t, FourCC("Absk"), 0, 0) return t end return true')
+    lua_value(game, '_G.bh = function(t) return function() if GetAttacker() == t then B.s = (B.s or 0) + 1 '
+              'if IssueImmediateOrder(t, "berserk") then B.k = (B.k or 0) + 1 end end end end return true')
     lua_value(game, '_G.on = function(t) local g = CreateTrigger() TriggerRegisterAnyUnitEventBJ(g, EVENT_PLAYER_UNIT_ATTACKED) '
-              'TriggerAddAction(g, function() if GetAttacker() == t then B.s = (B.s or 0) + 1 '
-              'if IssueImmediateOrder(t, "berserk") then B.k = (B.k or 0) + 1 end end end) end return true')
+              'TriggerAddAction(g, bh(t)) end return true')
     results = {}
     for name, with_trigger in (('control', False), ('berserk at every swing', True)):
         target = game.create(CREEPS, maul.GROUND_TARGET, x + 400, y + 300, life=100000, rooted=True)[0]['id']
@@ -2911,7 +2918,7 @@ def test_probe_region_enter_order(game):
     """Probe (wc3-sim, Maul's creep_abilities difference): two regions over the same rect, each with an
     enter trigger, and the triggers made in the other order from the regions (region 1 first,
     trigger 2 first). A unit moved in: which trigger runs first? Then the same with one region and
-    two triggers. Logs the orders."""
+    two triggers, then a fourth region with a trigger on the oldest region made after. Logs the orders."""
     findings = Findings()
     maul.start(game)
     x, y = red_lane_spots()[5]
@@ -2930,8 +2937,17 @@ def test_probe_region_enter_order(game):
     lua_value(game, f'_G.O = {{}} SetUnitPosition(U, {x}, {y}) return true')
     time.sleep(1)
     one_region = lua_value(game, 'return table.concat(O, " > ")')
+    # A fourth region, then a trigger on the OLDEST region made last, then one on the fourth: which
+    # decides, the region's age or the trigger's?
+    lua_value(game, f'_G.R4 = CreateRegion() RegionAddRect(R4, rc) tr(R1, "D(R1, made 5th)") tr(R4, "E(R4, made 6th)") '
+                    f'SetUnitPosition(U, {x + 600}, {y}) return true')
+    time.sleep(1)
+    lua_value(game, f'_G.O = {{}} SetUnitPosition(U, {x}, {y}) return true')
+    time.sleep(1)
+    four_regions = lua_value(game, 'return table.concat(O, " > ")')
     game.log(f'two regions over one rect: {two_regions}')
     game.log(f'then a third region with two triggers, all firing: {one_region}')
+    game.log(f'then a fourth region, D on R1 and E on R4 made last: {four_regions}')
     findings.check(two_regions.count('>') == 1, f'not both enter triggers ran: {two_regions!r}')
     findings.raise_if_any('the region probe')
 
@@ -2946,11 +2962,12 @@ def test_probe_finished_building_life(game):
     game.cmd(RED, '.gold 5000')
     # Both towers cost lumber, which a Maul player has none of
     lua_value(game, 'SetPlayerState(Player(0), PLAYER_STATE_RESOURCE_LUMBER, 5000) return true')
-    lua_value(game, '_G.L = {} local t = CreateTrigger() TriggerRegisterAnyUnitEventBJ(t, EVENT_PLAYER_UNIT_CONSTRUCT_FINISH) '
-                    'TriggerAddAction(t, function() local u = GetConstructedStructure() L[#L + 1] = lf(u, "at finish") '
-                    'TimerStart(CreateTimer(), 1, false, function() L[#L + 1] = lf(u, "1 s later") end) end) return true')
     lua_value(game, '_G.lf = function(u, w) return UnitId2String(GetUnitTypeId(u)) .. " " .. w .. ": " .. '
                     'string.format("%.6f of %.6f", GetWidgetLife(u), BlzGetUnitMaxHP(u)) end return true')
+    lua_value(game, '_G.fin = function() local u = GetConstructedStructure() L[#L + 1] = lf(u, "at finish") '
+                    'TimerStart(CreateTimer(), 1, false, function() L[#L + 1] = lf(u, "1 s later") end) end return true')
+    lua_value(game, '_G.L = {} local t = CreateTrigger() TriggerRegisterAnyUnitEventBJ(t, EVENT_PLAYER_UNIT_CONSTRUCT_FINISH) '
+                    'TriggerAddAction(t, fin) return true')
     spots = red_lane_spots()
     for builder, building, spot in (('hpea', 'hwtw', spots[2]),):
         worker = game.create(RED, builder, spot[0], spot[1] - 256)[0]['id']
