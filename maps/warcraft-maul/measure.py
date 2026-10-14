@@ -2981,3 +2981,38 @@ def test_probe_finished_building_life(game):
     game.log(f'finished buildings: {lines}')
     findings.check(lines.count('|') >= 1, f'the Scout Tower never finished: {lines!r}')
     findings.raise_if_any('the building life probe')
+
+
+def test_probe_construction_life_by_race(game):
+    """Probe (wc3-sim #3, runi95's request): a Peasant builds a Farm and a Barracks, a Peon an Orc
+    Burrow (the control: a build with no late start in 2.0.1). Each one's life, to 6 decimals, 10 s
+    after its construct-start event, at its construct-finish event, a tick later and 1 s later.
+    2.0.1: a Farm reads 177.786255 at 10 s and 499.998688 at its finish."""
+    findings = Findings()
+    maul.start(game)
+    game.cmd(RED, '.gold 5000')
+    lua_value(game, 'SetPlayerState(Player(0), PLAYER_STATE_RESOURCE_LUMBER, 5000) _G.L = {} return true')
+    lua_value(game, '_G.lf = function(u, w) return UnitId2String(GetUnitTypeId(u)) .. " " .. w .. " " .. '
+                    'string.format("%.6f/%.6f", GetWidgetLife(u), BlzGetUnitMaxHP(u)) end return true')
+    lua_value(game, '_G.at = function(u, s, w) TimerStart(CreateTimer(), s, false, function() L[#L + 1] = lf(u, w) end) end return true')
+    lua_value(game, '_G.st = function() at(GetConstructingStructure(), 10, "start+10s") end return true')
+    lua_value(game, '_G.fin = function() local u = GetConstructedStructure() L[#L + 1] = lf(u, "finish") '
+                    'at(u, 0, "finish+tick") at(u, 1, "finish+1s") end return true')
+    lua_value(game, 'local t = CreateTrigger() TriggerRegisterAnyUnitEventBJ(t, EVENT_PLAYER_UNIT_CONSTRUCT_START) '
+                    'TriggerAddAction(t, st) return true')
+    lua_value(game, 'local t = CreateTrigger() TriggerRegisterAnyUnitEventBJ(t, EVENT_PLAYER_UNIT_CONSTRUCT_FINISH) '
+                    'TriggerAddAction(t, fin) return true')
+    x, y = RED_AREA[0] + 640, RED_AREA[1] + 384
+    for builder, building, spot in (('hpea', 'hhou', (x, y)), ('hpea', 'hbar', (x + 512, y)), ('opeo', 'otrb', (x + 1024, y))):
+        worker = game.create(RED, builder, spot[0], spot[1] + 384)[0]['id']
+        before = int(lua_value(game, 'return #L'))
+        game.build(RED, worker, building, *spot)
+        try:
+            game.wait(f'the {building} to finish', lambda: int(lua_value(game, 'return #L')) >= before + 4, 150)
+        except TestFailed as error:
+            findings.append(f'{building}: {error}')
+    lines = int(lua_value(game, 'return #L'))
+    for i in range(1, lines + 1):
+        game.log('construction life: ' + lua_value(game, f'return L[{i}]'))
+    findings.check(lines >= 4, f'no building finished ({lines} readings)')
+    findings.raise_if_any('the construction life probe')
