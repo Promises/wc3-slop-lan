@@ -2956,6 +2956,36 @@ def test_probe_region_enter_order(game):
     findings.raise_if_any('the region probe')
 
 
+def test_bronze_towers_cast_slow(game):
+    """The Bronze Dragon Whelp, Drake and Dragon (o00M, o01F, o01K) order their Slow (A0DA, cooldown 5)
+    at the unit they attack (GenericAttack), so each, put down as built and shooting a rooted target
+    for 12 s of game time, casts it at least twice. They never did while the Dragon towers' classes
+    were not registered (RaceInitialiser), and every Bronze tower was a plain Tower."""
+    findings = Findings()
+    maul.start(game)
+    game.cmd(RED, '-lives 1000000')
+    x, y = red_lane_spots()[5]
+    lua_value(game, '_G.S = {} _G.cnt = function(k) S[k] = (S[k] or 0) + 1 end return true')
+    lua_value(game, '_G.st = CreateTrigger() TriggerRegisterAnyUnitEventBJ(st, EVENT_PLAYER_UNIT_SPELL_EFFECT) TriggerAddAction(st, '
+                    'function() if GetTriggerUnit() == T and GetSpellAbilityId() == FourCC("A0DA") then cnt("cast") end end) return true')
+    lua_value(game, '_G.at = CreateTrigger() TriggerRegisterAnyUnitEventBJ(at, EVENT_PLAYER_UNIT_ATTACKED) '
+                    'TriggerAddAction(at, function() if GetAttacker() == T then cnt("swing") end end) return true')
+    for unit_type, name in (('o00M', 'Whelp'), ('o01F', 'Drake'), ('o01K', 'Dragon')):
+        target = game.create(CREEPS, maul.GROUND_TARGET, x + 300, y + 300, life=1000000, rooted=True)[0]['id']
+        tower = place_tower(game, unit_type, (x, y))
+        lua_value(game, f'_G.M = unit({target}) _G.T = unit({tower}) _G.S = {{}} return true')
+        # The counts frozen after 12 s of game time, whenever the harness gets to read them
+        lua_value(game, 'TimerStart(CreateTimer(), 12, false, function() S.out = (S.swing or 0) .. " " .. (S.cast or 0) end) return true')
+        game.wait('12 s of game time', lambda: lua_value(game, 'return S.out or ""') != '', 40)
+        swings, casts = (int(v) for v in lua_value(game, 'return S.out').split())
+        game.log(f'Bronze {name}: swings {swings}, Slow casts {casts}, class {tower_classes(game).get(tower)}')
+        findings.check(swings > 0, f'the Bronze {name} never attacked')
+        findings.check(casts >= 2, f'the Bronze {name} cast Slow {casts} time(s) in 12 s of attacking ({swings} swings)')
+        lua_value(game, 'RemoveUnit(T) RemoveUnit(M) return true')
+        time.sleep(1)
+    findings.raise_if_any('the Bronze towers\' Slow')
+
+
 def test_probe_finished_building_life(game):
     """Probe (wc3-sim #3, 3.0): a peasant builds a Scout Tower (2x2, as the lane's tower spots are); its
     life against its max, to 6 decimals, at its construct-finish event and a second later. runi95
