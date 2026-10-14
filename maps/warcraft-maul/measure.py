@@ -2872,3 +2872,95 @@ def test_ancient_golem_grows_to_its_size(game):
                    f'sizes {[round(s, 2) for s in sizes]}, not 0.3 growing by 0.1 a minute to 1.0')
     findings.check(gained == 7 * 75, f'seven minutes added {gained} damage, not 525')
     findings.raise_if_any('the Ancient Golem')
+
+
+# Probes of the real game, for wc3-sim (runi95/wc3-sim): each logs what the game does, and checks only
+# that its control behaved, so a probe passes whatever the game does and the log line is the answer.
+
+def test_probe_berserk_in_the_attacked_event(game):
+    """Probe (wc3-sim PR #13): a Guard Tower with Berserk (Absk, cooldown 0) shooting a rooted target,
+    once with a trigger on EVENT_PLAYER_UNIT_ATTACKED ordering it to berserk at every swing, once
+    without. Does the swing under way land, and does the tower keep shooting? Logs swings, berserks
+    taken and life lost for both."""
+    findings = Findings()
+    maul.start(game)
+    game.cmd(RED, '-lives 1000000')
+    x, y = red_lane_spots()[5]
+    lua_value(game, 'SetPlayerTechResearched(Player(0), FourCC("Robk"), 1) _G.B = {} return true')
+    lua_value(game, '_G.mk = function(dx) local t = CreateUnit(Player(0), FourCC("hgtw"), ' + str(x) + ' + dx, ' + str(y)
+              + ', 0) UnitAddAbility(t, FourCC("Absk")) BlzSetUnitAbilityCooldown(t, FourCC("Absk"), 0, 0) return t end return true')
+    lua_value(game, '_G.on = function(t) local g = CreateTrigger() TriggerRegisterAnyUnitEventBJ(g, EVENT_PLAYER_UNIT_ATTACKED) '
+              'TriggerAddAction(g, function() if GetAttacker() == t then B.s = (B.s or 0) + 1 '
+              'if IssueImmediateOrder(t, "berserk") then B.k = (B.k or 0) + 1 end end end) end return true')
+    results = {}
+    for name, with_trigger in (('control', False), ('berserk at every swing', True)):
+        target = game.create(CREEPS, maul.GROUND_TARGET, x + 400, y + 300, life=100000, rooted=True)[0]['id']
+        lua_value(game, f'_G.B = {{}} _G.T = mk(0) {"on(T)" if with_trigger else ""} return true')
+        time.sleep(8)
+        lost = int(float(lua_value(game, f'return 100000 - GetWidgetLife(unit({target}))')))
+        swings, taken = lua_value(game, 'return (B.s or 0) .. " " .. (B.k or 0)').split()
+        results[name] = (int(swings), int(taken), lost)
+        game.log(f'{name}: swings {swings}, berserk taken {taken}, life lost {lost}')
+        lua_value(game, f'RemoveUnit(T) RemoveUnit(unit({target})) return true')
+        time.sleep(1)
+    findings.check(results['control'][2] > 0, f'the control tower never hit: {results["control"]}')
+    findings.raise_if_any('the Berserk probe')
+
+
+def test_probe_region_enter_order(game):
+    """Probe (wc3-sim, Maul's creep_abilities difference): two regions over the same rect, each with an
+    enter trigger, and the triggers made in the other order from the regions (region 1 first,
+    trigger 2 first). A unit moved in: which trigger runs first? Then the same with one region and
+    two triggers. Logs the orders."""
+    findings = Findings()
+    maul.start(game)
+    x, y = red_lane_spots()[5]
+    lua_value(game, f'_G.O = {{}} _G.rc = Rect({x - 64}, {y - 64}, {x + 64}, {y + 64}) _G.R1 = CreateRegion() RegionAddRect(R1, rc) '
+                    '_G.R2 = CreateRegion() RegionAddRect(R2, rc) return true')
+    lua_value(game, '_G.tr = function(r, n) local t = CreateTrigger() TriggerRegisterEnterRegion(t, r, nil) '
+                    'TriggerAddAction(t, function() O[#O + 1] = n end) end return true')
+    lua_value(game, 'tr(R2, "T2(R2, made 1st)") tr(R1, "T1(R1, made 2nd)") return true')
+    lua_value(game, f'_G.U = CreateUnit(Player(13), FourCC("{maul.GROUND_TARGET}"), {x + 600}, {y}, 0) return true')
+    lua_value(game, f'SetUnitPosition(U, {x}, {y}) return true')
+    time.sleep(1)
+    two_regions = lua_value(game, 'return table.concat(O, " > ")')
+    lua_value(game, f'_G.O = {{}} _G.R3 = CreateRegion() RegionAddRect(R3, rc) tr(R3, "A(made 1st)") tr(R3, "B(made 2nd)") '
+                    f'SetUnitPosition(U, {x + 600}, {y}) return true')
+    time.sleep(1)
+    lua_value(game, f'_G.O = {{}} SetUnitPosition(U, {x}, {y}) return true')
+    time.sleep(1)
+    one_region = lua_value(game, 'return table.concat(O, " > ")')
+    game.log(f'two regions over one rect: {two_regions}')
+    game.log(f'then a third region with two triggers, all firing: {one_region}')
+    findings.check(two_regions.count('>') == 1, f'not both enter triggers ran: {two_regions!r}')
+    findings.raise_if_any('the region probe')
+
+
+def test_probe_finished_building_life(game):
+    """Probe (wc3-sim #3, 3.0): a peasant builds a Scout Tower (2x2, as the lane's tower spots are); its
+    life against its max, to 6 decimals, at its construct-finish event and a second later. runi95
+    read from 2.0.1 that a Human building ends a float step or two under its max (2.0.1: a Farm
+    499.998688 at the finish, 499.999969 a tick later); 3.0's Human case was unmeasured."""
+    findings = Findings()
+    maul.start(game)
+    game.cmd(RED, '.gold 5000')
+    # Both towers cost lumber, which a Maul player has none of
+    lua_value(game, 'SetPlayerState(Player(0), PLAYER_STATE_RESOURCE_LUMBER, 5000) return true')
+    lua_value(game, '_G.L = {} local t = CreateTrigger() TriggerRegisterAnyUnitEventBJ(t, EVENT_PLAYER_UNIT_CONSTRUCT_FINISH) '
+                    'TriggerAddAction(t, function() local u = GetConstructedStructure() L[#L + 1] = lf(u, "at finish") '
+                    'TimerStart(CreateTimer(), 1, false, function() L[#L + 1] = lf(u, "1 s later") end) end) return true')
+    lua_value(game, '_G.lf = function(u, w) return UnitId2String(GetUnitTypeId(u)) .. " " .. w .. ": " .. '
+                    'string.format("%.6f of %.6f", GetWidgetLife(u), BlzGetUnitMaxHP(u)) end return true')
+    spots = red_lane_spots()
+    for builder, building, spot in (('hpea', 'hwtw', spots[2]),):
+        worker = game.create(RED, builder, spot[0], spot[1] - 256)[0]['id']
+        before = int(lua_value(game, 'return #L'))
+        game.build(RED, worker, building, *spot)
+        try:
+            game.wait(f'the {building} to finish', lambda: int(lua_value(game, 'return #L')) >= before + 2, 120)
+        except TestFailed as error:
+            findings.append(f'{building}: {error}')
+    lines = lua_value(game, 'return table.concat(L, " | ")')
+    game.log(f'finished buildings: {lines}')
+    findings.check(lines.count('|') >= 1, f'the Scout Tower never finished: {lines!r}')
+    findings.raise_if_any('the building life probe')
