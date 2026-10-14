@@ -2887,7 +2887,8 @@ def test_probe_berserk_in_the_attacked_event(game):
     """Probe (wc3-sim PR #13): a Guard Tower with Berserk (Absk, cooldown 0) shooting a rooted target,
     once with a trigger on EVENT_PLAYER_UNIT_ATTACKED ordering it to berserk at every swing, once
     without. Does the swing under way land, and does the tower keep shooting? Logs swings, berserks
-    taken and life lost for both."""
+    taken and life lost for both, counted over 8 s of GAME time (a game timer from the tower's
+    making): runi95 reads at most 14 swings in 8 s from the binary (a 0.6 s cooldown at +50%)."""
     findings = Findings()
     maul.start(game)
     game.cmd(RED, '-lives 1000000')
@@ -2902,13 +2903,15 @@ def test_probe_berserk_in_the_attacked_event(game):
     results = {}
     for name, with_trigger in (('control', False), ('berserk at every swing', True)):
         target = game.create(CREEPS, maul.GROUND_TARGET, x + 400, y + 300, life=100000, rooted=True)[0]['id']
-        lua_value(game, f'_G.B = {{}} _G.T = mk(0) {"on(T)" if with_trigger else ""} return true')
-        time.sleep(8)
-        lost = int(float(lua_value(game, f'return 100000 - GetWidgetLife(unit({target}))')))
-        swings, taken = lua_value(game, 'return (B.s or 0) .. " " .. (B.k or 0)').split()
+        lua_value(game, f'_G.M = unit({target}) _G.B = {{}} _G.T = mk(0) {"on(T)" if with_trigger else ""} return true')
+        # The counts frozen after 8 s of game time, whenever the harness gets to read them
+        lua_value(game, 'TimerStart(CreateTimer(), 8, false, function() B.out = (B.s or 0) .. " " .. (B.k or 0) .. " " '
+                        '.. math.floor(100000 - GetWidgetLife(M)) end) return true')
+        game.wait('8 s of game time', lambda: lua_value(game, 'return B.out or ""') != '', 30)
+        swings, taken, lost = (int(v) for v in lua_value(game, 'return B.out').split())
         results[name] = (int(swings), int(taken), lost)
         game.log(f'{name}: swings {swings}, berserk taken {taken}, life lost {lost}')
-        lua_value(game, f'RemoveUnit(T) RemoveUnit(unit({target})) return true')
+        lua_value(game, 'RemoveUnit(T) RemoveUnit(M) return true')
         time.sleep(1)
     findings.check(results['control'][2] > 0, f'the control tower never hit: {results["control"]}')
     findings.raise_if_any('the Berserk probe')
