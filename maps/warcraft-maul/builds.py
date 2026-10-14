@@ -38,10 +38,13 @@ def race_named(name):
     raise TestFailed(f'no race called {name!r} in the map')
 
 
-def standing_on(units, spot, builders):
-    """The building on a tower spot, if any (the builders made for it aside)."""
-    return next((unit for unit in units if abs(unit['x'] - spot[0]) <= 32 and abs(unit['y'] - spot[1]) <= 32
-                 and unit['type'] not in builders), None)
+def standing_on(units, spot, builders, chain=None):
+    """The building on a tower spot, if any (the builders made for it aside). With the spot's chain,
+    one of its forms first: a tower's summons can stand on its spot too (a Nerubian Caretaker's
+    spiderling, in wc3-sim at least)."""
+    here = [unit for unit in units if abs(unit['x'] - spot[0]) <= 32 and abs(unit['y'] - spot[1]) <= 32
+            and unit['type'] not in builders]
+    return next((unit for unit in here if chain and unit['type'] in chain), here[0] if here else None)
 
 
 class Job:
@@ -65,8 +68,8 @@ class Job:
         self.spots = [maul.lane_point(lane, tower['at']) for tower in self.towers]
         self.uses_food = any(self.by_id[i]['food'] for tower in self.towers for i in tower['chain'])
 
-    def at(self, units, spot):
-        return standing_on(units, spot, self.builders)
+    def at(self, units, spot, chain=None):
+        return standing_on(units, spot, self.builders, chain)
 
     def where(self):
         return f"{maul.COLOURS[self.lane].lower()}'s lane"
@@ -136,7 +139,7 @@ def build_designs(game, jobs, findings):
     def standing():
         look()
         registered = {player: maul.towers(game, player) for player in players}
-        return all((unit := job.at(units[job.player], spot)) and unit['type'] == tower['chain'][0]
+        return all((unit := job.at(units[job.player], spot, tower['chain'])) and unit['type'] == tower['chain'][0]
                    and unit['id'] in registered[job.player]
                    for job in jobs for tower, spot in zip(job.towers, job.spots))
     try:
@@ -151,7 +154,7 @@ def build_designs(game, jobs, findings):
         todo = [(job, tower, spot) for job in jobs for tower, spot in zip(job.towers, job.spots)
                 if len(tower['chain']) > step]
         for job, tower, spot in todo:
-            unit = job.at(units[job.player], spot)
+            unit = job.at(units[job.player], spot, tower['chain'])
             if unit:
                 game.upgrade(job.player, unit['id'], tower['chain'][step])
 
@@ -160,7 +163,7 @@ def build_designs(game, jobs, findings):
             # upgrade's start, and the next form's order is refused until then
             look()
             notes = game.events('upgraded')
-            return all((unit := job.at(units[job.player], spot)) and unit['type'] == tower['chain'][step]
+            return all((unit := job.at(units[job.player], spot, tower['chain'])) and unit['type'] == tower['chain'][step]
                        and any(f" {unit['id']} type={tower['chain'][step]}" in line for line in notes)
                        for job, tower, spot in todo)
         try:
@@ -172,7 +175,7 @@ def build_designs(game, jobs, findings):
     look()
     results = []
     for job in jobs:
-        placed = [(tower, spot, job.at(units[job.player], spot)) for tower, spot in zip(job.towers, job.spots)]
+        placed = [(tower, spot, job.at(units[job.player], spot, tower['chain'])) for tower, spot in zip(job.towers, job.spots)]
         for tower, spot, unit in placed:
             want = tower['chain'][-1]
             findings.check(unit is not None and unit['type'] == want,
