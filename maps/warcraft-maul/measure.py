@@ -2458,7 +2458,8 @@ def walk_tracker(game, tower):
     lua_value(game, 'TimerStart(CreateTimer(), 0.1, true, function() creeps(function(u) if UnitAlive(u) then step(u) end end) end) return true')
     lua_value(game, f'_G.CT = unit({tower}) _G.ranked = function() local r = {{}} creeps(function(u) '
                     'if UnitAlive(u) and IsUnitInRange(u, CT, 675) then r[#r + 1] = u end end) return r end return true')
-    lua_value(game, '_G.walkline = function() local r = ranked() table.sort(r, function(a, b) return (wk[a] or 0) > (wk[b] or 0) end) '
+    lua_value(game, '_G.byWalk = function(a, b) return (wk[a] or 0) > (wk[b] or 0) end return true')
+    lua_value(game, '_G.walkline = function() local r = ranked() table.sort(r, byWalk) '
                     'local s = {} for i = 1, math.min(#r, 6) do s[i] = Slop.ref(r[i]) .. ":" .. math.floor(wk[r[i]] or 0) end return s end return true')
     lua_value(game, '_G.wt = CreateTrigger() for p = 13, 16 do TriggerRegisterPlayerUnitEvent(wt, Player(p), EVENT_PLAYER_UNIT_ATTACKED, nil) end return true')
     lua_value(game, 'TriggerAddAction(wt, function() if GetAttacker() ~= CT then return end local s = walkline() '
