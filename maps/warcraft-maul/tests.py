@@ -75,9 +75,11 @@ def test_unit_orders(game):
 def test_settings_command_and_debug_mode(game):
     """The host's settings command (-s debug 100) sets Debug mode: no wave counts down on its own,
     -start starts the current one, and when it is over the game stays on it, with no next wave on
-    the way. A race is picked, since a wave only comes to lanes with one."""
+    the way. A race is picked, since a wave only comes to lanes with one, and the lives raised: with
+    no towers the wave's leaks would lose the game, which ends no wave (a lost game pays nothing)."""
     maul.start(game)
     maul.pick(game, RED, HUMAN_TOWN_HALL)
+    game.cmd(RED, '-lives 1000000')
     first = maul.fresh_beat(game)
     time.sleep(5)
     later = maul.fresh_beat(game)
